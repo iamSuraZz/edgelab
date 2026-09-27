@@ -7,6 +7,7 @@
  */
 export * from './timeframes';
 export * from './feeds';
+export * from './units';
 export * from './market';
 export * from './symbols';
 export * from './metrics-dictionary';

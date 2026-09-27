@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { SymbolCodeSchema } from './feeds';
+import type { AccountMoney, Lots, Price } from './units';
 
 /**
  * One stored M1 OHLCV bar. `time` is the bar's OPEN time in UTC epoch milliseconds —
@@ -169,26 +170,31 @@ export interface CostedTrade {
   /** 1-based ordinal within the run. */
   readonly seq: number;
   readonly side: TradeSide;
-  /** Always positive, in lots. */
-  readonly qty: number;
+  /**
+   * Always positive, in LOTS — branded, because multiplying this by a tick has shipped twice.
+   *
+   * A brand is still a `number` at run time and assignable TO `number`, so reading and formatting it
+   * is unaffected. What no longer compiles is passing it where UNITS are wanted.
+   */
+  readonly qty: Lots;
   readonly entryTime: number;
   readonly exitTime: number;
   readonly entryBar: number;
   readonly exitBar: number;
-  readonly entryPrice: number;
-  readonly exitPrice: number;
-  /** Engine P&L before our overlay, for cross-checking. */
-  readonly grossPnl: number;
-  readonly commission: number;
-  readonly slippageCost: number;
-  readonly spreadCost: number;
-  readonly financingCost: number;
-  /** P&L after ALL costs. This is what every statistic is computed from. */
-  readonly netPnl: number;
+  readonly entryPrice: Price;
+  readonly exitPrice: Price;
+  /** Engine P&L before our overlay, for cross-checking. In the ACCOUNT currency. */
+  readonly grossPnl: AccountMoney;
+  readonly commission: AccountMoney;
+  readonly slippageCost: AccountMoney;
+  readonly spreadCost: AccountMoney;
+  readonly financingCost: AccountMoney;
+  /** P&L after ALL costs, in the ACCOUNT currency. Every statistic is computed from this. */
+  readonly netPnl: AccountMoney;
   /** Maximum adverse excursion while open, <= 0. Null when not reconstructed. */
-  readonly mae: number | null;
+  readonly mae: AccountMoney | null;
   /** Maximum favourable excursion while open, >= 0. */
-  readonly mfe: number | null;
+  readonly mfe: AccountMoney | null;
   readonly barsHeld: number | null;
   readonly exitReason: string | null;
 }

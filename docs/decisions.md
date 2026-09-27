@@ -807,3 +807,85 @@ same confusion had already produced a wrong figure in the same-bar estimate. The
 named `valuePerTickPerQty` and documents its unit, because "mintick" reads like it is safe to
 multiply by a quantity and it is not. The real figure is `mintick × contractSize × pointValue` = $1.00
 per lot for a 5-digit pair.
+
+## A14 · Twelve Data coverage — D4 was deleting real minutes
+
+**The 15% shortfall was ours, not the provider's.** Measured against the volume-carrying Dukascopy
+series over the window they share, 2022-01-03 .. 2022-06-30:
+
+| feed               | before fix | flat bars | after fix   |
+| ------------------ | ---------- | --------- | ----------- |
+| EURUSD (dukascopy) | 185,008    | 1.35%     | unchanged   |
+| EURUSD.twelvedata  | 164,544    | **0.00%** | **185,386** |
+
+Twelve Data omits volume for forex — every bar arrives with `volume: 0`, which the adapter documents
+as "the honest value, not a guess". D4 drops a bar that is flat AND zero-volume, and requires both
+precisely because flatness alone is not evidence of filler. On a feed with no volume that conjunction
+collapses to "drop every flat bar", which is the exact rule D4's own docstring says is wrong.
+
+The signature was unmistakable once broken down by hour: missing minutes clustered at 21:00 UTC
+(2,718), then 22-23 and 02-05 — the thinnest liquidity of the day, where a minute is most likely to
+be genuinely flat. Whole-range checks could not see it; "no gap longer than four days" is blind to an
+hour missing every night.
+
+`normalizeBars` now takes `volumeIsMeaningful`, default true, and the rule is skipped when a feed does
+not report volume. A real flat minute kept is a small inaccuracy; a real flat minute deleted is a hole
+that every downstream check then reads as the market being closed. Re-imported: **664,720 → 738,570
+bars (+73,850, +11.1%)**, and the feed now holds slightly MORE minutes than the bid feed over the
+shared window, with 80,088 flat bars retained.
+
+**This feed is MID, not bid.** Its closes sit +0.0000269 above Dukascopy's bid where the average bid
+spread is 0.0000413 — a ratio of 0.65, and the matched set excludes the widest-spread quiet minutes,
+so the true figure is nearer 0.5. The cost overlay assumes bars are BID and charges a full spread on
+the side that buys at the ask. On a mid feed the correct treatment is half a spread each side, so the
+overlay currently mis-attributes cost on this feed even though the total is close. **Not yet fixed** —
+recorded so the two-year acceptance numbers are read with it in mind.
+
+## A15 · Branded unit types
+
+Four unit mix-ups have shipped, every one silent: account-vs-quote capital (out by ~148x on JPY), the
+cross-check comparing yen with dollars, and the lots-vs-units tick bug TWICE — once in the same-bar
+estimate, once in the fill audit a session later. The common cause is that all of these are `number`,
+so the compiler is indifferent to multiplying a lot count by a tick.
+
+`packages/shared/src/units.ts` adds `Lots`, `Units`, `Price`, `PriceDelta`, `QuoteMoney` and
+`AccountMoney` as compile-time brands. Zero runtime cost — the values are plain numbers, the
+constructors are identity functions — and the only way between brands is a named function that takes
+the factor it needs (`lotsToUnits(q, contractSize)`, `quoteToAccountMoney(m, accountPerQuote)`).
+
+The brands are applied to `CostedTrade`, and what that caught is the point: **exactly two production
+sites mint a CostedTrade** — the cost overlay and the DB read — and the compiler found both. It also
+forced `priceDeltaToQuote` and `financingCostQuote` to take `Units`, so a `Lots` value passed there no
+longer compiles. That is precisely the bug from A5 and the fill audit, now unwritable.
+
+Verified two ways: four `@ts-expect-error` assertions in `units.test.ts` fail the build if the brands
+ever stop separating, and a scratch probe confirmed enforcement across the package boundary rather
+than only within `shared`.
+
+A caveat worth knowing: `pnpm typecheck` run from a package directory catches strictly more than
+`npx tsc` from the repo root, because module resolution differs by CWD. The package script is
+authoritative. Test factories now brand their defaults and accept plain-number overrides, so fixtures
+stay legible.
+
+Coverage is `CostedTrade`, the cost overlay, equity reconstruction and the DB boundary. The metrics
+inputs and the validation check signatures still take plain numbers — worth doing, not yet done.
+
+## A16 · Splice window is derived, not fixed
+
+The splice window is now the longest timeframe the script actually requests through
+`request.security`, floored at one week.
+
+A fixed week was wrong: the leak horizon is one bucket of whatever was asked for, so a script reading
+MN1 with `lookahead_on` sees up to a month ahead and a one-week splice leaves most of that month
+untouched — the leak outlasts the perturbation and the check passes a leaking run. The causality seam
+(A1a) already records every requested timeframe, so this is known rather than guessed. MN1 is treated
+as 31 days, erring long: an over-wide splice costs donor history, an under-wide one misses leaks.
+
+Re-verified after the change — the leaky fixture still fails, the clean twin still passes 6 of 6.
+
+## A17 · Sealed holdout is back on the list
+
+Spec 06 §3 includes a sealed holdout — reserve the most recent X% of data, exclude it from normal
+runs, unseal once and record that it was viewed, and report "holdout viewed N times". It had dropped
+off the remaining-work list. It now sits after walk-forward, which is the right order: the holdout is
+the last thing a strategy should touch, and walk-forward is what it is being protected from.

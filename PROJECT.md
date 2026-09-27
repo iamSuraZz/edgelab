@@ -95,7 +95,7 @@ pnpm run import:file mt5 EURUSD <abs.csv> 120        # 120 = broker server UTC o
 
 ## Current status — NOT v1.0
 
-Green: `build` 9/9, `typecheck` 16/16, `lint` clean, **714 tests** (`pnpm test`).
+Green: `build` 9/9, `typecheck` 16/16, `lint` clean, **733 tests** (`pnpm test`).
 CI runs all five checks on every push — see `.github/workflows/ci.yml`.
 
 **Verified against the real docker stack:**
@@ -171,8 +171,16 @@ roadmap's "in the browser" is NOT met.
 | Exness imports + MT5 parity test (A12)                             | **NOT PLANNED** — no exports |
 
 Still to build in step 1, in this order: the rest of **execution bias** (M1 ambiguity replay,
-bid/ask asymmetry, cost stress), then OOS + walk-forward, timeframe matrix + regimes, and Monte
-Carlo. Each must run through `pnpm validate` on the 2022 data before the next starts.
+bid/ask asymmetry, cost stress), then OOS split, walk-forward (A3 timing first), **sealed holdout**
+(A17), timeframe matrix + regimes, and Monte Carlo. Each must run through `pnpm validate` on the 2022
+data before the next starts.
+
+> **The acceptance feed was 11% short and it was our fault (A14).** Twelve Data omits volume for
+> forex, so D4's "flat AND zero-volume" rule collapsed to "drop every flat bar" and deleted 73,850
+> real minutes, clustered in the thin hours. Fixed, re-imported, and the feed now holds slightly MORE
+> minutes than the bid feed over the window they share. **Still open: this feed is MID, not bid**
+> (+0.65x spread above the bid feed), and the cost overlay assumes bid — so its cost attribution is
+> wrong on this feed even though the total is close.
 
 The **fill audit** is done and verified: 1,096 fills on the clean fixture all sit inside their bar and
 all landed on a bar open — independent evidence for next-bar-open execution — while

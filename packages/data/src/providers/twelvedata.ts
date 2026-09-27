@@ -140,7 +140,13 @@ export class TwelveDataProvider implements MarketDataProvider {
 
       if (page.length === 0) break;
 
-      const { bars } = normalizeBars(page, { fromMs, toMs });
+      /*
+       * `volumeIsMeaningful: false` because this API omits volume for forex and crypto (see the
+       * note at the top of this file). Without it, D4's "flat AND zero-volume" rule degenerates to
+       * "flat" and deletes every quiet minute: measured at 20,464 of 185,008 lost over 2022-01..06,
+       * concentrated in the thin hours.
+       */
+      const { bars } = normalizeBars(page, { fromMs, toMs, volumeIsMeaningful: false });
       if (bars.length > 0) {
         barsEmitted += bars.length;
         yield bars;

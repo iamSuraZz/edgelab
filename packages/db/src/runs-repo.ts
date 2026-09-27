@@ -1,3 +1,4 @@
+import { accountMoney, lots, price } from '@edgelab/shared';
 import { createHash } from 'node:crypto';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import type { CostedTrade, EquityPoint, EquitySample } from '@edgelab/shared';
@@ -658,24 +659,30 @@ export async function readRunTrades(db: Database, runId: string): Promise<Costed
     .where(eq(runTrades.runId, runId))
     .orderBy(runTrades.seq);
 
+  /*
+   * The other boundary where plain numbers become a CostedTrade — the first being the cost overlay.
+   * Branding is applied here rather than trusted, because a column is just a double and the DB has
+   * no idea whether it holds lots or units. `qty` is written in LOTS by `applyCosts`; if that ever
+   * changes, this is the line that has to change with it.
+   */
   return rows.map((r) => ({
     seq: r.seq,
     side: r.side === 'short' ? ('short' as const) : ('long' as const),
-    qty: r.qty,
+    qty: lots(r.qty),
     entryTime: fromDbTime(r.entryTs),
     exitTime: fromDbTime(r.exitTs),
     entryBar: r.entryBar,
     exitBar: r.exitBar,
-    entryPrice: r.entryPrice,
-    exitPrice: r.exitPrice,
-    grossPnl: r.grossPnl,
-    commission: r.commission,
-    slippageCost: r.slippageCost,
-    spreadCost: r.spreadCost,
-    financingCost: r.financingCost,
-    netPnl: r.netPnl,
-    mae: r.mae,
-    mfe: r.mfe,
+    entryPrice: price(r.entryPrice),
+    exitPrice: price(r.exitPrice),
+    grossPnl: accountMoney(r.grossPnl),
+    commission: accountMoney(r.commission),
+    slippageCost: accountMoney(r.slippageCost),
+    spreadCost: accountMoney(r.spreadCost),
+    financingCost: accountMoney(r.financingCost),
+    netPnl: accountMoney(r.netPnl),
+    mae: r.mae === null ? null : accountMoney(r.mae),
+    mfe: r.mfe === null ? null : accountMoney(r.mfe),
     barsHeld: r.barsHeld,
     exitReason: r.exitReason,
   }));

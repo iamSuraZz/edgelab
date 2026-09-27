@@ -1,5 +1,6 @@
 import { dailyLocalInstants, localClock } from '@edgelab/data';
-import type { Bar, CostConfig, CostedTrade, SymbolSpec, TradeSide } from '@edgelab/shared';
+import { accountMoney, price, units, unitsToLots } from '@edgelab/shared';
+import type { Bar, CostConfig, CostedTrade, SymbolSpec, TradeSide, Units } from '@edgelab/shared';
 
 import type { EngineTrade } from './pine-engine';
 
@@ -104,8 +105,8 @@ export function spreadPriceAt(
 }
 
 /** Convert a price delta into a quote-currency amount for a position of `units`. */
-export function priceDeltaToQuote(priceDelta: number, units: number, symbol: SymbolSpec): number {
-  return priceDelta * Math.abs(units) * symbol.pointValue;
+export function priceDeltaToQuote(priceDelta: number, size: Units, symbol: SymbolSpec): number {
+  return priceDelta * Math.abs(size) * symbol.pointValue;
 }
 
 /* --------------------------------------------------------------- financing */
@@ -167,7 +168,7 @@ export function fundingIntervalsBetween(
  */
 export function financingCostQuote(
   side: TradeSide,
-  units: number,
+  size: Units,
   entryPrice: number,
   entryMs: number,
   exitMs: number,
@@ -177,7 +178,7 @@ export function financingCostQuote(
   const f = config.financing;
   if (f.mode === 'none' || f.swapFree) return 0;
 
-  const absUnits = Math.abs(units);
+  const absUnits = units(Math.abs(size));
 
   if (f.mode === 'mt5Points') {
     const points = side === 'long' ? f.swapLongPoints : f.swapShortPoints;
@@ -247,7 +248,10 @@ export function applyCosts(params: ApplyCostsParams): CostedTrade[] {
   );
 
   return closed.map((trade, i) => {
-    const units = trade.qty;
+    // Branded as UNITS (contracts), which is what the engine reports. The conversion to lots
+    // happens once, below, through `unitsToLots` — the two mix-ups this guards against both came
+    // from treating one as the other.
+    const positionUnits = units(trade.qty);
     const exitTime = trade.exitTime as number;
 
     // One spread per round trip, charged on the side that bought at the ask.
@@ -255,13 +259,13 @@ export function applyCosts(params: ApplyCostsParams): CostedTrade[] {
       trade.side === 'long' ? barByIndex(trade.entryBar) : barByIndex(trade.exitBar);
     const spreadAt = trade.side === 'long' ? trade.entryTime : exitTime;
     const spreadCost =
-      priceDeltaToQuote(spreadPriceAt(spreadBar, symbol, config), units, symbol) *
+      priceDeltaToQuote(spreadPriceAt(spreadBar, symbol, config), positionUnits, symbol) *
       quoteToAccount(spreadAt);
 
     const financingCost =
       financingCostQuote(
         trade.side,
-        units,
+        positionUnits,
         trade.entryPrice,
         trade.entryTime,
         exitTime,
@@ -277,7 +281,7 @@ export function applyCosts(params: ApplyCostsParams): CostedTrade[] {
     // so this figure explains where part of enginePnl went rather than charging anything new.
     // Both fills slip, hence the factor of 2.
     const slippageCost =
-      priceDeltaToQuote(2 * config.slippagePoints * symbol.mintick, units, symbol) *
+      priceDeltaToQuote(2 * config.slippagePoints * symbol.mintick, positionUnits, symbol) *
       quoteToAccount(exitTime);
 
     const enginePnl = (trade.netPnl ?? 0) * quoteToAccount(exitTime);
@@ -286,21 +290,21 @@ export function applyCosts(params: ApplyCostsParams): CostedTrade[] {
     return {
       seq: i + 1,
       side: trade.side,
-      qty: units / symbol.contractSize,
+      qty: unitsToLots(positionUnits, symbol.contractSize),
       entryTime: trade.entryTime,
       exitTime,
       entryBar: trade.entryBar,
       exitBar: trade.exitBar ?? -1,
-      entryPrice: trade.entryPrice,
-      exitPrice: trade.exitPrice as number,
-      grossPnl: enginePnl,
-      commission,
-      slippageCost,
-      spreadCost,
-      financingCost,
-      netPnl,
-      mae: trade.maxDrawdown === null ? null : -Math.abs(trade.maxDrawdown),
-      mfe: trade.maxRunup === null ? null : Math.abs(trade.maxRunup),
+      entryPrice: price(trade.entryPrice),
+      exitPrice: price(trade.exitPrice as number),
+      grossPnl: accountMoney(enginePnl),
+      commission: accountMoney(commission),
+      slippageCost: accountMoney(slippageCost),
+      spreadCost: accountMoney(spreadCost),
+      financingCost: accountMoney(financingCost),
+      netPnl: accountMoney(netPnl),
+      mae: trade.maxDrawdown === null ? null : accountMoney(-Math.abs(trade.maxDrawdown)),
+      mfe: trade.maxRunup === null ? null : accountMoney(Math.abs(trade.maxRunup)),
       barsHeld: trade.exitBar === null ? null : trade.exitBar - trade.entryBar,
       exitReason: trade.exitId,
     };

@@ -67,8 +67,34 @@ import { assertSingleFeed } from '../ingest/feed-guard';
 /** Cutoffs for the dynamic test. Spec 06 says six. */
 const CUTOFF_COUNT = 6;
 
-/** How much of the future the splice test replaces. See the note at the call site. */
-const SPLICE_WINDOW_MS = 7 * 24 * 60 * 60_000;
+/**
+ * Floor for the splice window. The real width is derived per run — see `spliceWindowFor`.
+ */
+const SPLICE_WINDOW_FLOOR_MS = 7 * 24 * 60 * 60_000;
+
+/**
+ * How much of the future to replace, sized to the longest timeframe the script actually requests.
+ *
+ * A fixed week was the first cut and it is not enough. The leak horizon is one bucket of whatever
+ * timeframe was asked for, so a script reading MN1 with `lookahead_on` sees up to a month ahead —
+ * and a one-week splice leaves most of that month untouched, letting the leak outlast the
+ * perturbation and the check pass a leaking run.
+ *
+ * Now that the causality seam records every `request.security` call, the requested timeframes are
+ * known rather than guessed: take the longest, and keep a week as the floor so a script that reads
+ * no higher timeframe at all still gets a meaningful splice.
+ */
+function spliceWindowFor(calls: readonly SecurityCall[] | null): number {
+  let longest = 0;
+  for (const call of calls ?? []) {
+    const tf = parsePineTimeframe(call.timeframe);
+    if (tf === null) continue;
+    // MN1 has no fixed length; 31 days is the longest a calendar month can be, and erring long is
+    // the safe direction — an over-wide splice costs donor history, an under-wide one misses leaks.
+    longest = Math.max(longest, timeframeMs(tf) ?? 31 * 24 * 60 * 60_000);
+  }
+  return Math.max(SPLICE_WINDOW_FLOOR_MS, longest);
+}
 
 export interface ValidationReport {
   readonly runId: string;
@@ -216,6 +242,7 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
    */
   let spliceCompleted = 0;
   let spliceSkipped: string | null = null;
+  const spliceWindowMs = spliceWindowFor(full.engineResult.securityCalls);
 
   const splice =
     cutoffs.length === 0
@@ -232,16 +259,15 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
             );
 
             /*
-             * Replace ONE WEEK of minutes after the cutoff, not the whole remainder.
+             * Replace one SPLICE WINDOW of minutes after the cutoff, not the whole remainder.
              *
-             * A week covers a D1 bucket and most of a W1 one, which bounds the horizon of the leak
-             * this test targets: `lookahead_on` on timeframe X sees at most to the end of the
-             * current X bucket. Splicing the entire remainder instead needs a disjoint donor as
-             * long as the run, which no early cutoff can supply — measured: the clean fixture
+             * The width is the longest timeframe this script requests, floored at a week — see
+             * `spliceWindowFor`. Splicing the entire remainder instead needs a disjoint donor as
+             * long as the run, which no early cutoff can supply: measured, the clean fixture
              * reported `n/a` for want of 104,809 donor bars.
              */
             const needed = m1.filter(
-              (b) => b.time > cutoffMs && b.time <= cutoffMs + SPLICE_WINDOW_MS,
+              (b) => b.time > cutoffMs && b.time <= cutoffMs + spliceWindowMs,
             ).length;
             const donor = needed === 0 ? [] : pickDonor(m1, cutoffMs, needed);
 
@@ -258,7 +284,7 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
               bars: m1,
               cutoffMs,
               donor,
-              windowMs: SPLICE_WINDOW_MS,
+              windowMs: spliceWindowMs,
             });
             const spliced = await orchestrateRun({
               ...shared,
@@ -303,7 +329,7 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
   const results: CheckResult[] = [
     lintResult(lint),
     prefixResult(prefix, cutoffs.length),
-    spliceResult(splice, cutoffs.length, spliceSkipped),
+    spliceResult(splice, cutoffs.length, spliceSkipped, spliceWindowMs),
     causality,
     fillAuditResult(fills, symbolRow.mintick),
     ...runChecks(BUILT_IN_CHECKS, {
@@ -484,6 +510,7 @@ function spliceResult(
   splice: PrefixInvarianceResult | null,
   cutoffCount: number,
   skipped: string | null,
+  windowMs: number,
 ): CheckResult {
   const base = {
     id: 'lookahead-future-splice',
@@ -543,9 +570,17 @@ function spliceResult(
     status: 'pass',
     detail:
       `Decisions were identical across ${String(splice.usableCutoffs)} of ${String(cutoffCount)} ` +
-      'cutoffs when only the future was replaced, with no comparison margin. Unlike the truncation ' +
-      'test, this does rule out a bounded look-ahead such as request.security with lookahead_on.',
-    evidence: { cutoffs: cutoffCount, usableCutoffs: splice.usableCutoffs, margin: 0 },
+      `cutoffs when only the future was replaced — ${String(Number((windowMs / 86_400_000).toFixed(1)))} ` +
+      'days of it, with no comparison margin. Unlike the truncation test, this does rule out a ' +
+      'bounded look-ahead such as request.security with lookahead_on.',
+    evidence: {
+      cutoffs: cutoffCount,
+      usableCutoffs: splice.usableCutoffs,
+      margin: 0,
+      // Reported because the window is derived per run (A16), so a reader can tell how far ahead
+      // the perturbation actually reached.
+      spliceWindowDays: Number((windowMs / 86_400_000).toFixed(2)),
+    },
   };
 }
 

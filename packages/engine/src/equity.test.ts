@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { accountMoney, lots, price } from '@edgelab/shared';
 import { getSeedSymbol, type Bar, type CostedTrade } from '@edgelab/shared';
 
 import {
@@ -40,28 +41,50 @@ const BARS: Bar[] = [
 
 const CAPITAL = 10_000;
 
-function costed(over: Partial<CostedTrade> = {}): CostedTrade {
+/**
+ * Overrides as PLAIN numbers, branded by the factory.
+ *
+ * `CostedTrade`'s money, price and size fields are branded so the compiler can catch the unit
+ * mix-ups that have shipped four times. A fixture should still read `netPnl: 200` rather than
+ * `netPnl: accountMoney(200)`, so the branding happens here, once.
+ */
+type TradeOverrides = Omit<
+  Partial<CostedTrade>,
+  'qty' | 'entryPrice' | 'exitPrice' | 'grossPnl' | 'netPnl' | 'mae' | 'mfe'
+> & {
+  qty?: number;
+  entryPrice?: number;
+  exitPrice?: number;
+  grossPnl?: number;
+  netPnl?: number;
+  mae?: number | null;
+  mfe?: number | null;
+};
+
+function costed(over: TradeOverrides = {}): CostedTrade {
+  const { qty, entryPrice, exitPrice, grossPnl, netPnl, mae, mfe, ...rest } = over;
+
   return {
     seq: 1,
     side: 'long',
-    qty: 1, // lots
+    qty: lots(qty ?? 1),
     entryTime: BARS[0]!.time,
     exitTime: BARS[2]!.time,
     entryBar: 0,
     exitBar: 2,
-    entryPrice: 1.1,
-    exitPrice: 1.104,
-    grossPnl: 400,
-    commission: 0,
-    slippageCost: 0,
-    spreadCost: 0,
-    financingCost: 0,
-    netPnl: 400,
-    mae: null,
-    mfe: null,
+    entryPrice: price(entryPrice ?? 1.1),
+    exitPrice: price(exitPrice ?? 1.104),
+    grossPnl: accountMoney(grossPnl ?? 400),
+    commission: accountMoney(0),
+    slippageCost: accountMoney(0),
+    spreadCost: accountMoney(0),
+    financingCost: accountMoney(0),
+    netPnl: accountMoney(netPnl ?? 400),
+    mae: mae === undefined || mae === null ? null : accountMoney(mae),
+    mfe: mfe === undefined || mfe === null ? null : accountMoney(mfe),
     barsHeld: 2,
     exitReason: null,
-    ...over,
+    ...rest,
   };
 }
 

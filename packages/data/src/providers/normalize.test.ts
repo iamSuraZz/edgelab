@@ -169,3 +169,44 @@ describe('joinBidAsk', () => {
     expect(joinBidAsk(bid, ask)[0]?.spread).toBe(0);
   });
 });
+
+describe('D4 only applies when volume carries information', () => {
+  /**
+   * The rule requires flatness AND zero volume because flatness alone is not evidence of filler.
+   * On a feed that reports no volume, every bar has volume 0 and the conjunction collapses to
+   * "drop every flat bar" — which deletes real quiet minutes. Measured: Twelve Data's EURUSD lost
+   * 20,464 of 185,008 minutes over 2022-01..06, all in the thin hours.
+   */
+  const flatNoVolume = [
+    { time: 60_000, open: 1.1, high: 1.1, low: 1.1, close: 1.1, volume: 0 },
+    { time: 120_000, open: 1.1, high: 1.1002, low: 1.0998, close: 1.1001, volume: 0 },
+  ];
+
+  it('drops a flat zero-volume bar when volume IS meaningful', () => {
+    const { bars } = normalizeBars(flatNoVolume, { volumeIsMeaningful: true });
+    expect(bars).toHaveLength(1);
+    expect(bars[0]!.time).toBe(120_000);
+  });
+
+  it('KEEPS it when the feed reports no volume', () => {
+    // A real flat minute kept is a small inaccuracy; a real flat minute deleted is a hole every
+    // downstream check then reads as the market being closed.
+    const { bars } = normalizeBars(flatNoVolume, { volumeIsMeaningful: false });
+    expect(bars).toHaveLength(2);
+  });
+
+  it('defaults to treating volume as meaningful, preserving D4 for real feeds', () => {
+    expect(normalizeBars(flatNoVolume).bars).toHaveLength(1);
+  });
+
+  it('still drops a flat bar with volume 0 on a volume feed even if others have volume', () => {
+    const mixed = [
+      { time: 60_000, open: 1.1, high: 1.1, low: 1.1, close: 1.1, volume: 0 },
+      { time: 120_000, open: 1.1, high: 1.1, low: 1.1, close: 1.1, volume: 7 },
+    ];
+    // The second is flat but a tick arrived, so it is a real minute — D4's whole point.
+    const { bars } = normalizeBars(mixed, { volumeIsMeaningful: true });
+    expect(bars).toHaveLength(1);
+    expect(bars[0]!.volume).toBe(7);
+  });
+});

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { accountMoney, lots, price } from '@edgelab/shared';
 import type { CostedTrade, EquityPoint, EquitySample } from '@edgelab/shared';
 import { analyseDrawdown, analyseDrawdownDuration, ulcerIndex } from './drawdown';
 import { annualizedRatios, cagrPct, populationStdev, tradingViewRatios } from './risk-ratios';
@@ -259,19 +260,19 @@ describe('cost drag edge cases', () => {
     return {
       seq: 1,
       side: 'long',
-      qty: 1,
+      qty: lots(1),
       entryTime: T0,
       exitTime: T0 + DAY,
       entryBar: 0,
       exitBar: 10,
-      entryPrice: 1.1,
-      exitPrice: 1.1,
-      grossPnl: netPnl + costs,
-      commission: costs,
-      slippageCost: 0,
-      spreadCost: 0,
-      financingCost: 0,
-      netPnl,
+      entryPrice: price(1.1),
+      exitPrice: price(1.1),
+      grossPnl: accountMoney(netPnl + costs),
+      commission: accountMoney(costs),
+      slippageCost: accountMoney(0),
+      spreadCost: accountMoney(0),
+      financingCost: accountMoney(0),
+      netPnl: accountMoney(netPnl),
       mae: null,
       mfe: null,
       barsHeld: null,

@@ -1,3 +1,4 @@
+import { lots, lotsToUnits, units } from '@edgelab/shared';
 import type {
   Bar,
   ClosedTrade,
@@ -5,6 +6,7 @@ import type {
   EquityPoint,
   EquitySample,
   SymbolSpec,
+  Units,
 } from '@edgelab/shared';
 
 import { IDENTITY_RATE, priceDeltaToQuote, type QuoteToAccount } from './costs';
@@ -77,7 +79,7 @@ export function reconstructEquity(params: ReconstructParams): ReconstructedEquit
 
   interface OpenLeg {
     readonly side: 'long' | 'short';
-    readonly units: number;
+    readonly units: Units;
     readonly entryPrice: number;
     readonly entryBar: number;
     readonly exitBar: number;
@@ -93,7 +95,8 @@ export function reconstructEquity(params: ReconstructParams): ReconstructedEquit
   for (const trade of trades) {
     pushLeg({
       side: trade.side,
-      units: Math.abs(trade.qty) * symbol.contractSize,
+      // CostedTrade.qty is LOTS, so it must go through the contract size to become units.
+      units: lotsToUnits(lots(Math.abs(trade.qty)), symbol.contractSize),
       entryPrice: trade.entryPrice,
       entryBar: trade.entryBar,
       exitBar: trade.exitBar,
@@ -102,7 +105,9 @@ export function reconstructEquity(params: ReconstructParams): ReconstructedEquit
   for (const trade of openTrades) {
     pushLeg({
       side: trade.side,
-      units: Math.abs(trade.qty),
+      // An EngineTrade's qty is already in units (contracts) — no contract size involved. The two
+      // lines above and here meant different things while both were plain numbers.
+      units: units(Math.abs(trade.qty)),
       entryPrice: trade.entryPrice,
       entryBar: trade.entryBar,
       // Never closes, so it is marked to the end of the run.

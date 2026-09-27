@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { accountMoney, lots, price } from '@edgelab/shared';
 import type { CostedTrade, EquityPoint, EquitySample } from '@edgelab/shared';
 import { buildMetricsReport } from './report';
 import { expectancyFromRates } from './trade-stats';
@@ -45,21 +46,21 @@ const SPECS: readonly Spec[] = [
 const TRADES: CostedTrade[] = SPECS.map((s, i) => ({
   seq: s.seq,
   side: s.side,
-  qty: 1, // 1 lot each
+  qty: lots(1), // 1 lot each
   entryTime: s.exit - 2 * DAY,
   exitTime: s.exit,
   entryBar: i * 10,
   exitBar: i * 10 + 5,
-  entryPrice: 1.1,
-  exitPrice: 1.1 + s.net / 100_000,
-  grossPnl: s.gross,
-  commission: 7,
-  slippageCost: 3,
-  spreadCost: 10,
-  financingCost: 0,
-  netPnl: s.net,
-  mae: -50,
-  mfe: 80,
+  entryPrice: price(1.1),
+  exitPrice: price(1.1 + s.net / 100_000),
+  grossPnl: accountMoney(s.gross),
+  commission: accountMoney(7),
+  slippageCost: accountMoney(3),
+  spreadCost: accountMoney(10),
+  financingCost: accountMoney(0),
+  netPnl: accountMoney(s.net),
+  mae: accountMoney(-50),
+  mfe: accountMoney(80),
   barsHeld: 5,
   exitReason: 'signal',
 }));

@@ -6,6 +6,7 @@ import {
   type Bar,
   type CostConfig,
   type SymbolSpec,
+  units,
 } from '@edgelab/shared';
 
 import {
@@ -152,12 +153,12 @@ describe('spreadPriceAt', () => {
 describe('priceDeltaToQuote', () => {
   it('turns a price delta into money for a position in units', () => {
     // 1 pip on 1 standard lot of EURUSD is $10.
-    expect(priceDeltaToQuote(0.0001, 100_000, eurusd)).toBeCloseTo(10, 9);
+    expect(priceDeltaToQuote(0.0001, units(100_000), eurusd)).toBeCloseTo(10, 9);
   });
 
   it('is signed by the delta and unsigned by the size', () => {
-    expect(priceDeltaToQuote(-0.0001, 100_000, eurusd)).toBeCloseTo(-10, 9);
-    expect(priceDeltaToQuote(-0.0001, -100_000, eurusd)).toBeCloseTo(-10, 9);
+    expect(priceDeltaToQuote(-0.0001, units(100_000), eurusd)).toBeCloseTo(-10, 9);
+    expect(priceDeltaToQuote(-0.0001, units(-100_000), eurusd)).toBeCloseTo(-10, 9);
   });
 });
 
@@ -283,7 +284,7 @@ describe('financingCostQuote', () => {
     // -7 points x 0.00001 x 100,000 units x 1 = -$7 per night, so $7 of cost.
     const cost = financingCostQuote(
       'long',
-      100_000,
+      units(100_000),
       1.1,
       Date.UTC(2024, 0, 2, 10),
       Date.UTC(2024, 0, 2, 23),
@@ -296,7 +297,7 @@ describe('financingCostQuote', () => {
   it('turns a positive broker swap into a credit, i.e. a negative cost', () => {
     const cost = financingCostQuote(
       'short',
-      100_000,
+      units(100_000),
       1.1,
       Date.UTC(2024, 0, 2, 10),
       Date.UTC(2024, 0, 2, 23),
@@ -310,7 +311,7 @@ describe('financingCostQuote', () => {
     // Tue 10:00 -> Thu 10:00 crosses Tue (x1) and Wed (x3) = 4 charges of $7.
     const cost = financingCostQuote(
       'long',
-      100_000,
+      units(100_000),
       1.1,
       Date.UTC(2024, 0, 2, 10),
       Date.UTC(2024, 0, 4, 10),
@@ -324,7 +325,7 @@ describe('financingCostQuote', () => {
     expect(
       financingCostQuote(
         'long',
-        100_000,
+        units(100_000),
         1.1,
         Date.UTC(2024, 0, 2, 10),
         Date.UTC(2024, 0, 2, 15),
@@ -338,7 +339,7 @@ describe('financingCostQuote', () => {
     expect(
       financingCostQuote(
         'long',
-        100_000,
+        units(100_000),
         1.1,
         Date.UTC(2024, 0, 2, 10),
         Date.UTC(2024, 0, 5, 10),
@@ -356,7 +357,7 @@ describe('financingCostQuote', () => {
     // Notional 100,000 x 1.1 = 110,000. -3.65%/yr = -0.01%/night = -$11, so $11 of cost.
     const cost = financingCostQuote(
       'long',
-      100_000,
+      units(100_000),
       1.1,
       Date.UTC(2024, 0, 2, 10),
       Date.UTC(2024, 0, 2, 23),
@@ -381,15 +382,13 @@ describe('financingCostQuote', () => {
     const entry = Date.UTC(2024, 0, 2, 7);
     const exit = Date.UTC(2024, 0, 2, 17);
     expect(fundingIntervalsBetween(entry, exit, config)).toHaveLength(2);
-    expect(financingCostQuote('long', 100_000, 1.1, entry, exit, eurusd, config)).toBeCloseTo(
-      22,
-      6,
-    );
+    expect(
+      financingCostQuote('long', units(100_000), 1.1, entry, exit, eurusd, config),
+    ).toBeCloseTo(22, 6);
     // A short receives it.
-    expect(financingCostQuote('short', 100_000, 1.1, entry, exit, eurusd, config)).toBeCloseTo(
-      -22,
-      6,
-    );
+    expect(
+      financingCostQuote('short', units(100_000), 1.1, entry, exit, eurusd, config),
+    ).toBeCloseTo(-22, 6);
   });
 
   it('anchors funding intervals to the UTC epoch, as exchanges do', () => {

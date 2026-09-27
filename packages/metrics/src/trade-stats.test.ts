@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { accountMoney, lots, price } from '@edgelab/shared';
 import type { CostedTrade } from '@edgelab/shared';
 import {
   computeSideStats,
@@ -16,21 +17,21 @@ function trade(seq: number, netPnl: number, side: 'long' | 'short' = 'long'): Co
   return {
     seq,
     side,
-    qty: 1,
+    qty: lots(1),
     entryTime: T0 + seq * DAY,
     exitTime: T0 + seq * DAY + 3_600_000,
     entryBar: seq * 10,
     exitBar: seq * 10 + 4,
-    entryPrice: 1.1,
-    exitPrice: 1.1,
-    grossPnl: netPnl + 20,
-    commission: 7,
-    slippageCost: 3,
-    spreadCost: 10,
-    financingCost: 0,
-    netPnl,
-    mae: -30,
-    mfe: 40,
+    entryPrice: price(1.1),
+    exitPrice: price(1.1),
+    grossPnl: accountMoney(netPnl + 20),
+    commission: accountMoney(7),
+    slippageCost: accountMoney(3),
+    spreadCost: accountMoney(10),
+    financingCost: accountMoney(0),
+    netPnl: accountMoney(netPnl),
+    mae: accountMoney(-30),
+    mfe: accountMoney(40),
     barsHeld: 4,
     exitReason: 'signal',
   };
@@ -181,7 +182,7 @@ describe('bars held and excursions', () => {
     const s = computeSideStats(
       [
         { ...trade(1, 100), barsHeld: null, mae: null, mfe: null },
-        { ...trade(2, 50), barsHeld: 8, mae: -20, mfe: 60 },
+        { ...trade(2, 50), barsHeld: 8, mae: accountMoney(-20), mfe: accountMoney(60) },
       ],
       CAPITAL,
     );

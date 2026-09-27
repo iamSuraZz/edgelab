@@ -55,6 +55,25 @@ export interface NormalizeOptions {
    * midweek minutes, which a session window never could.
    */
   readonly dropFillerBars?: boolean;
+  /**
+   * Whether this feed's `volume` carries information. Default true.
+   *
+   * D4 requires BOTH flatness and zero volume, precisely because flatness alone is not evidence of
+   * filler. That reasoning silently inverts on a feed that reports no volume at all: every bar has
+   * `volume === 0`, so the conjunction collapses to "drop every flat bar" — the exact rule the
+   * docstring above says is wrong.
+   *
+   * Measured on real data. Twelve Data omits volume for forex, and its EURUSD feed lost 20,464 of
+   * 185,008 minutes over 2022-01..06 against the volume-carrying Dukascopy series — 11% — with ZERO
+   * flat bars surviving where Dukascopy keeps 1.35%. The losses clustered in the quiet hours
+   * (21:00 UTC worst, then 22-23 and 02-05), which is exactly where a minute is most likely to be
+   * genuinely flat.
+   *
+   * So a feed without volume gets no filler filtering at all. A real flat minute kept is a minor
+   * inaccuracy; a real flat minute deleted is a hole in the series that every downstream check then
+   * reasons over as if the market had been closed.
+   */
+  readonly volumeIsMeaningful?: boolean;
 }
 
 const MS_PER_MINUTE = 60_000;
@@ -65,6 +84,7 @@ export function normalizeBars(
 ): NormalizeResult {
   const snap = options.snapToMinute ?? true;
   const dropFiller = options.dropFillerBars ?? true;
+  const volumeIsMeaningful = options.volumeIsMeaningful ?? true;
   const reasons: Partial<Record<RejectReason, number>> = {};
   let rejected = 0;
 
@@ -118,7 +138,9 @@ export function normalizeBars(
       continue;
     }
 
-    if (dropFiller && high === low && volume === 0) {
+    // `volumeIsMeaningful` guards the whole rule: without volume evidence, flatness alone is not
+    // grounds for deleting a minute. See the option's note.
+    if (dropFiller && volumeIsMeaningful && high === low && volume === 0) {
       reject('filler-bar');
       continue;
     }
