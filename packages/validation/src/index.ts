@@ -5,3 +5,4 @@ export * from './lookahead';
 export * from './same-bar';
 export * from './static-lint';
 export * from './prefix-invariance';
+export * from './future-splice';

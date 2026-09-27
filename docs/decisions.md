@@ -683,3 +683,52 @@ Two smaller CI notes. `pnpm/action-setup` fails if given a `version` input while
 `packageManager` — let it read the pin. And job logs need repository admin rights even on a public
 repo, so the workflow emits test failures as **annotations** (`--reporter=github-actions`), which are
 readable without auth and show inline on the diff.
+
+## A1b future splice — landed (2026-09-28)
+
+The layer that closes the gap A1 could not. Verified on the 2022 acceptance data, EURUSD H1,
+2022-01-03 .. 2022-06-30:
+
+| fixture        | backtest            | static lint | prefix invariance | future splice  |
+| -------------- | ------------------- | ----------- | ----------------- | -------------- |
+| lookahead-leak | PF 22.92, +$145,206 | fail        | **pass (6/6)**    | **fail**       |
+| lookahead-off  | PF 1.03, +$1,622    | pass        | pass (6/6)        | **pass (6/6)** |
+
+The leak is caught at the FIRST cutoff, on trade 97: `exitBar` was 468 on the real series and 467
+once the week after 2022-01-28 was replaced. Prefix invariance passes the same run 6 of 6 — the
+table is the argument for keeping both.
+
+**Why it works where truncation cannot.** Splicing removes nothing: every bar and timestamp survives
+and only the prices after the cutoff change. So the higher-timeframe bucket straddling the cutoff
+still exists and still closes, it just closes somewhere else. A causal strategy read byte-identical
+data before the cutoff and must decide identically, so **no margin is needed** — and no margin means
+no blind spot. Truncation needs its margin precisely because it deletes that bucket, and an honest
+HTF strategy legitimately behaves differently when it is gone.
+
+Three choices worth recording:
+
+**Multiplicative rescaling.** The graft is scaled so it continues from the cutoff price. An additive
+shift would give a donor from a different price level percentage moves the instrument never makes;
+a graft that opened at the donor's own level would be a gap no instrument made, and a strategy could
+react to the gap rather than to the leak.
+
+**A BOUNDED splice window — one week.** The first attempt replaced the entire remainder, which needs
+a disjoint donor as long as the run. No early cutoff can supply that, and the clean fixture reported
+`n/a` for want of 104,809 donor bars — a check that returns `n/a` on honest code is a check that gets
+switched off. A week covers a D1 bucket and most of a W1 one, which bounds the horizon this test
+targets: `lookahead_on` on timeframe X sees at most to the end of the current X bucket. The
+discontinuity where the real series resumes lies in the future relative to the cutoff, so it cannot
+reach the decisions being compared. Bounding it also improved the diagnosis — the leak went from a
+trade-count mismatch at the fourth cutoff to a named `exitBar` divergence at the first.
+
+**The donor is real data, disjoint, and from the oldest available history.** Real so the grafted
+future has the instrument's own volatility and session rhythm. Disjoint from everything at or after
+the cutoff so the donor cannot BE the future it stands in for, which would make the test silently
+vacuous. Oldest so the graft is least likely to look like a smooth continuation of the recent past.
+When no disjoint donor exists the check reports `n/a` with the reason rather than splicing with
+overlapping data.
+
+**The pass is now worth something.** The static lint can only say it recognised nothing, and prefix
+invariance is structurally blind to a bounded leak. Future splice is the one look-ahead layer whose
+clean result is a positive statement: at these cutoffs, on this data, the strategy demonstrably read
+nothing it should not have.

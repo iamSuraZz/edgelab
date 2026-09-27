@@ -4,6 +4,8 @@ import {
   BUILT_IN_CHECKS,
   cutoffsFor,
   estimateSameBarBias,
+  pickDonor,
+  spliceFuture,
   lintLookahead,
   marketFillsFromTrades,
   overallVerdict,
@@ -35,19 +37,25 @@ import { assertSingleFeed } from '../ingest/feed-guard';
  *      that earlier decisions did not change. Expensive — seven engine runs — but it does not
  *      care how the leak was written.
  *
- * A third layer, the `request.security` causality log, is built
- * (`packages/engine/src/pinets/security-log.ts`) but not wired: it needs the adapter to expose the
- * instrumentation seam per run, which is engine surgery this step did not take on.
+ *   3. FUTURE SPLICE (A1b) replaces a bounded window of the future with a different real segment,
+ *      rescaled to continue from the cutoff price, and compares with NO margin. This is the layer
+ *      that actually catches a bounded leak, and the only one whose pass is a real statement.
  *
- * KNOWN GAP, measured rather than assumed: prefix invariance does NOT catch the leaky fixture. A
- * bounded look-ahead only perturbs decisions within one HTF bucket of the cutoff, which is the
- * region the A1 margin has to exclude to avoid failing every honest HTF strategy. The leak is
- * currently caught by the static lint alone. Amendment A1b — splice different future data instead
- * of truncating — is the fix, and is the first thing the next step should build.
+ * Measured, which is why all three exist: prefix invariance passes the leaky fixture 6 of 6, because
+ * a bounded look-ahead perturbs only the bucket the cutoff sits in — exactly the region its margin
+ * has to exclude to avoid failing every honest HTF strategy. Future splice fails the same fixture at
+ * the first cutoff.
+ *
+ * A fourth layer, the `request.security` causality log, is built
+ * (`packages/engine/src/pinets/security-log.ts`) but not wired: it needs the adapter to expose the
+ * instrumentation seam per run.
  */
 
 /** Cutoffs for the dynamic test. Spec 06 says six. */
 const CUTOFF_COUNT = 6;
+
+/** How much of the future the splice test replaces. See the note at the call site. */
+const SPLICE_WINDOW_MS = 7 * 24 * 60 * 60_000;
 
 export interface ValidationReport {
   readonly runId: string;
@@ -104,13 +112,22 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
   const m1 = await readM1(params.db, symbolRow.id, barsFromMs, run.toMs);
   const knownSymbols = new Set((await listSymbols(params.db)).map((r) => r.symbol.toUpperCase()));
 
-  const engine = new PineTsEngine({
-    m1: {
-      readM1: (_symbol, fromMs, toMs) =>
-        Promise.resolve(m1.filter((b) => b.time >= fromMs && b.time < toMs)),
-    },
-    lookupSymbol: (code) => (code === symbolRow.symbol ? toSpec(symbolRow) : undefined),
-  });
+  /**
+   * An engine reading one specific bar array.
+   *
+   * A factory rather than a single instance because the splice test runs the SAME strategy over a
+   * different series per cutoff, and the series is the only thing that changes.
+   */
+  const engineOver = (bars: readonly (typeof m1)[number][]): PineTsEngine =>
+    new PineTsEngine({
+      m1: {
+        readM1: (_symbol, fromMs, toMs) =>
+          Promise.resolve(bars.filter((b) => b.time >= fromMs && b.time < toMs)),
+      },
+      lookupSymbol: (code) => (code === symbolRow.symbol ? toSpec(symbolRow) : undefined),
+    });
+
+  const engine = engineOver(m1);
 
   const costs = CostConfigSchema.safeParse(run.costs);
   const shared = {
@@ -171,6 +188,71 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
           },
         });
 
+  /* ------------------------------------------------- future splice (A1b) */
+
+  /*
+   * The same comparison as above with the margin set to ZERO, which is the entire point.
+   *
+   * Truncation needs a margin because it deletes the bucket straddling the cutoff, and an honest
+   * HTF strategy legitimately behaves differently when that bucket is gone. Splicing deletes
+   * nothing — every bar and timestamp survives, only the prices after the cutoff differ — so a
+   * causal strategy read byte-identical data before the cutoff and MUST decide identically. Any
+   * difference at all is a leak, so no margin is needed and no margin means no blind spot.
+   */
+  let spliceCompleted = 0;
+  let spliceSkipped: string | null = null;
+
+  const splice =
+    cutoffs.length === 0
+      ? null
+      : await runPrefixInvariance({
+          full: { trades: full.engineResult.trades.map(toComparable) },
+          cutoffs,
+          marginMs: 0,
+          runAt: async (cutoffMs) => {
+            spliceCompleted += 1;
+            report(
+              85 + (spliceCompleted / cutoffs.length) * 5,
+              `spliced run ${String(spliceCompleted)}/${String(cutoffs.length)}`,
+            );
+
+            /*
+             * Replace ONE WEEK of minutes after the cutoff, not the whole remainder.
+             *
+             * A week covers a D1 bucket and most of a W1 one, which bounds the horizon of the leak
+             * this test targets: `lookahead_on` on timeframe X sees at most to the end of the
+             * current X bucket. Splicing the entire remainder instead needs a disjoint donor as
+             * long as the run, which no early cutoff can supply — measured: the clean fixture
+             * reported `n/a` for want of 104,809 donor bars.
+             */
+            const needed = m1.filter(
+              (b) => b.time > cutoffMs && b.time <= cutoffMs + SPLICE_WINDOW_MS,
+            ).length;
+            const donor = needed === 0 ? [] : pickDonor(m1, cutoffMs, needed);
+
+            if (donor === null) {
+              // Not enough history before the cutoff to spare a DISJOINT donor. Splicing with
+              // overlapping data would make the test quietly vacuous, so refuse and report n/a.
+              spliceSkipped =
+                `Not enough history before ${new Date(cutoffMs).toISOString().slice(0, 10)} to ` +
+                `supply a donor segment disjoint from the ${String(needed)} minutes after it.`;
+              return { trades: full.engineResult.trades.map(toComparable) };
+            }
+
+            const grafted = spliceFuture({
+              bars: m1,
+              cutoffMs,
+              donor,
+              windowMs: SPLICE_WINDOW_MS,
+            });
+            const spliced = await orchestrateRun({
+              ...shared,
+              engine: engineOver(grafted.bars),
+            });
+            return { trades: spliced.engineResult.trades.map(toComparable) };
+          },
+        });
+
   /* --------------------------------------------------------- the checks */
 
   report(90, 'judging');
@@ -178,6 +260,7 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
   const results: CheckResult[] = [
     lintResult(lint),
     prefixResult(prefix, cutoffs.length),
+    spliceResult(splice, cutoffs.length, spliceSkipped),
     ...runChecks(BUILT_IN_CHECKS, {
       bars: full.engineResult.bars,
       timeframe,
@@ -337,10 +420,87 @@ function prefixResult(prefix: PrefixInvarianceResult | null, cutoffCount: number
     status: 'pass',
     detail:
       `No length-dependent divergence across ${String(prefix.usableCutoffs)} of ` +
-      `${String(cutoffCount)} truncation cutoffs. Does NOT rule out a bounded look-ahead such as ` +
-      'request.security with lookahead_on — that hides inside the comparison margin, and the ' +
-      'static lint is what catches it until the future-splice test (A1b) lands.',
+      `${String(cutoffCount)} truncation cutoffs. Covers UNBOUNDED leaks — last_bar_index, ` +
+      'barstate.islast, whole-series normalisation. A bounded look-ahead hides inside the ' +
+      'comparison margin here and is covered by the future-splice check instead.',
     evidence: { cutoffs: cutoffCount, usableCutoffs: prefix.usableCutoffs },
+  };
+}
+
+/**
+ * The future-splice verdict (A1b).
+ *
+ * The one look-ahead layer whose PASS is worth something. The static lint can only report that it
+ * recognised nothing; prefix invariance is structurally blind to a bounded leak. This compares a run
+ * against one where only the future differs, with no margin, so a clean result means the strategy
+ * demonstrably read nothing it should not have — at these cutoffs, on this data.
+ */
+function spliceResult(
+  splice: PrefixInvarianceResult | null,
+  cutoffCount: number,
+  skipped: string | null,
+): CheckResult {
+  const base = {
+    id: 'lookahead-future-splice',
+    label: 'Look-ahead (future splice)',
+    severity: 'critical' as const,
+  };
+
+  if (splice === null) {
+    const reason = 'The run window was too short to place a cutoff inside it.';
+    return { ...base, status: 'n/a', detail: reason, inconclusiveReason: reason };
+  }
+
+  if (splice.firstDivergence !== null) {
+    const d = splice.firstDivergence;
+    return {
+      ...base,
+      status: 'fail',
+      detail:
+        `Trade ${String(d.tradeSeq)} changed when only the FUTURE was replaced: ${d.field} was ` +
+        `${String(d.fullValue)} on the real series and ${String(d.truncatedValue)} once data after ` +
+        `${new Date(d.cutoffMs).toISOString()} was swapped for a different real segment. Every bar ` +
+        'up to that instant was byte-identical, so the decision depended on data the strategy ' +
+        'could not legitimately have seen. This is a look-ahead leak.',
+      evidence: {
+        field: d.field,
+        tradeSeq: d.tradeSeq,
+        bar: d.bar,
+        firstAffectedBarTime: new Date(d.time).toISOString(),
+        cutoff: new Date(d.cutoffMs).toISOString(),
+        realValue: d.fullValue,
+        splicedValue: d.truncatedValue,
+      },
+    };
+  }
+
+  // A donor could not be found for at least one cutoff, so coverage is incomplete and a pass would
+  // overstate what was tested.
+  if (skipped !== null) {
+    return { ...base, status: 'n/a', detail: skipped, inconclusiveReason: skipped };
+  }
+
+  if (splice.usableCutoffs === 0) {
+    const reason =
+      'No trade was decided before any cutoff, so no decision was ever compared. The check ran and ' +
+      'learned nothing.';
+    return {
+      ...base,
+      status: 'n/a',
+      detail: reason,
+      inconclusiveReason: reason,
+      evidence: { cutoffs: cutoffCount, usableCutoffs: 0 },
+    };
+  }
+
+  return {
+    ...base,
+    status: 'pass',
+    detail:
+      `Decisions were identical across ${String(splice.usableCutoffs)} of ${String(cutoffCount)} ` +
+      'cutoffs when only the future was replaced, with no comparison margin. Unlike the truncation ' +
+      'test, this does rule out a bounded look-ahead such as request.security with lookahead_on.',
+    evidence: { cutoffs: cutoffCount, usableCutoffs: splice.usableCutoffs, margin: 0 },
   };
 }
 

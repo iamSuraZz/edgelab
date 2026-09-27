@@ -95,7 +95,7 @@ pnpm run import:file mt5 EURUSD <abs.csv> 120        # 120 = broker server UTC o
 
 ## Current status — NOT v1.0
 
-Green: `build` 9/9, `typecheck` 16/16, `lint` clean, **681 tests** (`pnpm test`).
+Green: `build` 9/9, `typecheck` 16/16, `lint` clean, **700 tests** (`pnpm test`).
 CI runs all five checks on every push — see `.github/workflows/ci.yml`.
 
 **Verified against the real docker stack:**
@@ -170,48 +170,37 @@ roadmap's "in the browser" is NOT met.
 | CI on the public repo (A9)                                         | see badge / Actions tab      |
 | Exness imports + MT5 parity test (A12)                             | **NOT PLANNED** — no exports |
 
-Still to build in step 1, in this order: **A1b future-splice** (the leaky fixture currently escapes
-prefix invariance — see the box below), then wire the causality layer through the adapter's
-instrumentation seam, then execution bias, OOS + walk-forward, timeframe matrix + regimes, and
-Monte Carlo. Each must run through `pnpm validate` on the 2022 data before the next starts.
+Still to build in step 1, in this order: **wire the causality layer** through the adapter's
+instrumentation seam, then execution bias, OOS + walk-forward, timeframe matrix + regimes, and Monte
+Carlo. Each must run through `pnpm validate` on the 2022 data before the next starts.
 
-Observed on real EURUSD H1, January 2024:
+**The look-ahead family is complete and verified on the 2022 acceptance data** (EURUSD H1,
+2022-01-03 .. 2022-06-30):
 
-| fixture        | backtest           | `pnpm validate` verdict        |
-| -------------- | ------------------ | ------------------------------ |
-| lookahead-leak | PF 37.54, +$18,650 | **fail** (static lint, line 8) |
-| lookahead-off  | PF 0.70, −$1,807   | **pass**                       |
+| fixture        | backtest            | static lint | prefix invariance | future splice | verdict  |
+| -------------- | ------------------- | ----------- | ----------------- | ------------- | -------- |
+| lookahead-leak | PF 22.92, +$145,206 | fail        | **pass (6/6)**    | **fail**      | **fail** |
+| lookahead-off  | PF 1.03, +$1,622    | pass        | pass (6/6)        | pass (6/6)    | **pass** |
 
-The leaky fixture's fantasy PF is itself the tell, and the clean twin is an ordinary loser — which
-is the point of shipping them as a pair: a check that failed both would have found nothing.
+The leak is caught at the first cutoff on trade 97 — `exitBar` 468 on the real series, 467 once the
+following week was replaced. That prefix invariance passes the same run 6 of 6 is the argument for
+keeping both layers: truncation covers unbounded leaks, splicing covers bounded ones.
 
-| Piece                                                   | State                       |
-| ------------------------------------------------------- | --------------------------- |
-| `security-log.ts` seam                                  | done, **wired to nothing**  |
-| `lookahead.ts` causality (A1a)                          | done, 14 tests, **unwired** |
-| `static-lint.ts` — tokenizer, line numbers              | done, 18 tests              |
-| `prefix-invariance.ts` — cutoffs + margin (A1)          | done, 16 tests              |
-| `same-bar.ts` estimate (A5)                             | done, 11 tests              |
-| A2 statuses `pass/warn/fail/n·a` + Inconclusive verdict | done                        |
-| `validateRun` + `pnpm validate <runId>`                 | done, run on the real stack |
-| **Future-splice provider (A1b)**                        | **not started — see below** |
-| Execution bias (fill audit, intrabar, cost stress)      | **not started**             |
-| OOS split, walk-forward, sealed holdout                 | **not started**             |
-| Timeframe matrix, regimes, Monte Carlo                  | **not started**             |
-| `POST /backtests/:id/validate` + SSE (step 2)           | **not started**             |
-| "Integrity & Overfitting" tab (step 3)                  | **not started**             |
-
-> **Read before continuing: prefix invariance does NOT catch the leaky fixture.** Measured, not
-> assumed — it passes 6 of 6 cutoffs. Truncation only removes data at the end, so a bounded
-> look-ahead perturbs decisions only within one HTF bucket of the cutoff, which is exactly the
-> region the A1 margin must exclude to avoid failing every honest HTF strategy. The two
-> requirements conflict. It still catches UNBOUNDED leaks (`last_bar_index`, `barstate.islast`,
-> whole-series normalisation), and its passing message now says only that.
->
-> The leak is therefore caught by the **static lint alone** right now. **Build A1b (future splice)
-> first** in the next step: keep every bar and timestamp, replace the data after each cutoff with a
-> different real segment rescaled to the cutoff price. Nothing is removed, no margin is needed, and
-> an intra-bucket leak diverges on the first affected bar.
+| Piece                                                     | State                       |
+| --------------------------------------------------------- | --------------------------- |
+| `security-log.ts` seam                                    | done, **wired to nothing**  |
+| `lookahead.ts` causality (A1a)                            | done, 14 tests, **unwired** |
+| `static-lint.ts` — tokenizer, line numbers                | done, 18 tests              |
+| `prefix-invariance.ts` — cutoffs + margin (A1)            | done, 16 tests              |
+| `same-bar.ts` estimate (A5)                               | done, 11 tests              |
+| A2 statuses `pass/warn/fail/n·a` + Inconclusive verdict   | done                        |
+| `validateRun` + `pnpm validate <runId>`                   | done, run on the real stack |
+| **Future-splice (A1b)** — the layer that catches the leak | done, 15 tests, verified    |
+| Execution bias (fill audit, intrabar, cost stress)        | **not started**             |
+| OOS split, walk-forward, sealed holdout                   | **not started**             |
+| Timeframe matrix, regimes, Monte Carlo                    | **not started**             |
+| `POST /backtests/:id/validate` + SSE (step 2)             | **not started**             |
+| "Integrity & Overfitting" tab (step 3)                    | **not started**             |
 
 | Phase              | Core            | API                  | UI                   |
 | ------------------ | --------------- | -------------------- | -------------------- |
