@@ -776,3 +776,34 @@ nothing either way.
 
 One verdict per requested timeframe: a script reading both H4 and D1 is judged against each series
 separately, since merging them would make every value ambiguous against the other's buckets.
+
+## Execution bias — fill audit (2026-09-28)
+
+First of spec 06 §2. Verified on the 2022 acceptance data:
+
+| fixture            | fills | result                                          |
+| ------------------ | ----- | ----------------------------------------------- |
+| lookahead-off      | 1,096 | pass — all inside their bar, all at a bar open  |
+| ema-cross          | 238   | pass — same                                     |
+| rsi-mean-reversion | 174   | **warn** — 1 touch fill, penetration cost $1.00 |
+
+**Only one condition fails: a fill outside its bar's `[low, high]`.** That is not a modelling choice
+or a pessimistic assumption — it is an engine or data bug, and everything computed downstream of it is
+meaningless. Hence `critical`.
+
+**A touch fill is a WARNING, quantified.** A limit or stop at a level the bar only grazed is recorded
+as filled, but in life the level must be traded THROUGH and a wick may fill nobody. That makes the
+result optimistic rather than wrong, so the report carries what net P&L would be if every touch had
+required one tick of penetration — always adverse, so the adjusted figure is never flattering.
+
+An incidental confirmation worth noting: every fill in the two `strategy.entry`-only fixtures landed
+exactly on a bar open — 1,096 of 1,096 and 238 of 238. That is independent evidence for the
+documented next-bar-open execution, arrived at from the trade records rather than from the engine's
+own claim about itself.
+
+**A unit bug I made twice.** The first version multiplied `mintick` by `qty`, which reported the
+penetration cost as `0.00` — because `CostedTrade.qty` is in LOTS, so the product is 0.00001 × 1. The
+same confusion had already produced a wrong figure in the same-bar estimate. The parameter is now
+named `valuePerTickPerQty` and documents its unit, because "mintick" reads like it is safe to
+multiply by a quantity and it is not. The real figure is `mintick × contractSize × pointValue` = $1.00
+per lot for a 5-digit pair.

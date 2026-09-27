@@ -95,7 +95,7 @@ pnpm run import:file mt5 EURUSD <abs.csv> 120        # 120 = broker server UTC o
 
 ## Current status — NOT v1.0
 
-Green: `build` 9/9, `typecheck` 16/16, `lint` clean, **700 tests** (`pnpm test`).
+Green: `build` 9/9, `typecheck` 16/16, `lint` clean, **714 tests** (`pnpm test`).
 CI runs all five checks on every push — see `.github/workflows/ci.yml`.
 
 **Verified against the real docker stack:**
@@ -170,9 +170,13 @@ roadmap's "in the browser" is NOT met.
 | CI on the public repo (A9)                                         | see badge / Actions tab      |
 | Exness imports + MT5 parity test (A12)                             | **NOT PLANNED** — no exports |
 
-Still to build in step 1, in this order: **execution bias** (fill audit, M1 ambiguity replay,
+Still to build in step 1, in this order: the rest of **execution bias** (M1 ambiguity replay,
 bid/ask asymmetry, cost stress), then OOS + walk-forward, timeframe matrix + regimes, and Monte
 Carlo. Each must run through `pnpm validate` on the 2022 data before the next starts.
+
+The **fill audit** is done and verified: 1,096 fills on the clean fixture all sit inside their bar and
+all landed on a bar open — independent evidence for next-bar-open execution — while
+`rsi-mean-reversion` warns on 1 touch fill worth $1.00 of penetration cost.
 
 **The look-ahead family is complete and verified on the 2022 acceptance data** (EURUSD H1,
 2022-01-03 .. 2022-06-30):

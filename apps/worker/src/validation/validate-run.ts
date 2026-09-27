@@ -6,6 +6,7 @@ import {
   BUILT_IN_CHECKS,
   bucketsFromCandles,
   checkCausality,
+  auditFills,
   cutoffsFor,
   estimateSameBarBias,
   pickDonor,
@@ -19,6 +20,7 @@ import {
   type CheckResult,
   type LintResult,
   type CausalityResult,
+  type FillAuditResult,
   type PrefixInvarianceResult,
   type SameBarBiasEstimate,
   type Verdict,
@@ -274,6 +276,26 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
     chartBarMs: tfMs,
   });
 
+  /* ----------------------------------------------- fill audit (spec 06 §2) */
+
+  const fills = auditFills({
+    trades: full.trades.map((t, i) => ({
+      seq: i + 1,
+      side: t.side,
+      qty: t.qty,
+      entryBar: t.entryBar,
+      entryPrice: t.entryPrice,
+      exitBar: t.exitBar,
+      exitPrice: t.exitPrice,
+      netPnl: t.netPnl,
+    })),
+    bars: full.engineResult.bars,
+    mintick: symbolRow.mintick,
+    // qty on a costed trade is in LOTS, so the per-tick value must be per lot: one tick moved on
+    // one lot. Passing a bare mintick here reported the penetration cost as 0.00.
+    valuePerTickPerQty: symbolRow.mintick * symbolRow.contractSize * symbolRow.pointValue,
+  });
+
   /* --------------------------------------------------------- the checks */
 
   report(90, 'judging');
@@ -283,6 +305,7 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
     prefixResult(prefix, cutoffs.length),
     spliceResult(splice, cutoffs.length, spliceSkipped),
     causality,
+    fillAuditResult(fills, symbolRow.mintick),
     ...runChecks(BUILT_IN_CHECKS, {
       bars: full.engineResult.bars,
       timeframe,
@@ -658,6 +681,86 @@ function judgeCausality(params: {
       barsJudged: judged,
       timeframes: results.map((r) => r.tf).join(', '),
     },
+  };
+}
+
+/**
+ * The fill-audit verdict (spec 06 §2).
+ *
+ * Only ONE condition fails here: a fill outside its bar's range. That is not a modelling choice or a
+ * pessimistic assumption, it is an engine or data bug, and every number computed downstream of it is
+ * meaningless — so it is critical.
+ *
+ * Touch fills are a WARNING, not a failure. A limit or stop at a level the bar only grazed is
+ * recorded as filled, but in life the level has to be traded through and a wick may fill nobody.
+ * That makes the result optimistic rather than wrong, and the honest thing is to quantify it: the
+ * report carries what the P&L would be if every touch had required a tick of penetration.
+ */
+function fillAuditResult(audit: FillAuditResult, mintick: number): CheckResult {
+  const base = {
+    id: 'execution-fill-audit',
+    label: 'Execution (fill audit)',
+    severity: 'critical' as const,
+  };
+
+  if (audit.fillsChecked === 0) {
+    const reason =
+      audit.fillsUnlocatable > 0
+        ? `None of the ${String(audit.fillsUnlocatable)} fills could be matched to a bar, so nothing was audited.`
+        : 'The run produced no fills to audit.';
+    return { ...base, status: 'n/a', detail: reason, inconclusiveReason: reason };
+  }
+
+  if (audit.outOfRange.length > 0) {
+    const worst = [...audit.outOfRange].sort((a, b) => b.byPrice - a.byPrice)[0]!;
+    return {
+      ...base,
+      status: 'fail',
+      detail:
+        `${String(audit.outOfRange.length)} fill(s) lie outside the bar they happened on. Worst: ` +
+        `trade ${String(worst.tradeSeq)} ${worst.leg} filled at ${String(worst.price)} on bar ` +
+        `${String(worst.bar)}, whose range is ${String(worst.low)}..${String(worst.high)} — ` +
+        `${String(Math.round(worst.byPrice / mintick))} ticks outside. A price the bar never traded ` +
+        'at is an engine or data bug, not a modelling assumption.',
+      evidence: {
+        outOfRange: audit.outOfRange.length,
+        fillsChecked: audit.fillsChecked,
+        worstTrade: worst.tradeSeq,
+        worstBar: worst.bar,
+        ticksOutside: Math.round(worst.byPrice / mintick),
+      },
+    };
+  }
+
+  const drop = audit.netPnlReported - audit.netPnlIfPenetrationRequired;
+
+  if (audit.touches.length > 0) {
+    return {
+      ...base,
+      status: 'warn',
+      detail:
+        `${String(audit.touches.length)} of ${String(audit.fillsChecked)} fills landed exactly on a ` +
+        'bar extreme, so they assume a level the bar only touched was tradeable. Requiring one tick ' +
+        `of penetration would move net P&L by ${drop.toFixed(2)} ` +
+        `(${audit.netPnlReported.toFixed(2)} -> ${audit.netPnlIfPenetrationRequired.toFixed(2)}).`,
+      evidence: {
+        touches: audit.touches.length,
+        fillsChecked: audit.fillsChecked,
+        atOpen: audit.atOpen,
+        netPnlReported: Number(audit.netPnlReported.toFixed(2)),
+        netPnlIfPenetrationRequired: Number(audit.netPnlIfPenetrationRequired.toFixed(2)),
+      },
+    };
+  }
+
+  return {
+    ...base,
+    status: 'pass',
+    detail:
+      `All ${String(audit.fillsChecked)} fills sit inside their bar, and none depends on a level the ` +
+      `bar merely touched. ${String(audit.atOpen)} filled at a bar open, consistent with ` +
+      'next-bar-open market execution.',
+    evidence: { fillsChecked: audit.fillsChecked, atOpen: audit.atOpen, touches: 0 },
   };
 }
 
