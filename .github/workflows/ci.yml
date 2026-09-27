@@ -86,8 +86,10 @@ jobs:
 
       # ---- unit suite: no database, no network ----
 
+      # The `github-actions` reporter turns each failure into an annotation, which shows inline on
+      # the diff and is readable without repository admin rights — job logs are not.
       - name: test
-        run: pnpm test
+        run: pnpm test -- --reporter=default --reporter=github-actions
 
       # ---- everything below needs the stack ----
 
@@ -101,7 +103,7 @@ jobs:
         run: pnpm run data:seed-synthetic EURUSD 2024-01-01 2024-02-01
 
       - name: test:e2e
-        run: pnpm test:e2e
+        run: pnpm test:e2e -- --reporter=default --reporter=github-actions
 
       - name: install chromium
         run: pnpm --filter @edgelab/web exec playwright install --with-deps chromium
