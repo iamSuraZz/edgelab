@@ -18,9 +18,28 @@ interface FxOptions {
   readonly defaultSpreadPoints?: number;
 }
 
+/**
+ * The price increment for a given number of decimal digits.
+ *
+ * Parsed from a decimal string rather than computed as `10 ** -digits`, and that is not
+ * pedantry. Exponentiation is **implementation-approximated** in ECMAScript — the spec explicitly
+ * permits engines to differ — whereas string-to-number conversion is exactly specified as
+ * round-to-nearest. So `10 ** -5` may or may not equal the literal `1e-5` depending on the V8
+ * version, while `Number('1e-5')` always does.
+ *
+ * CI caught this: `10 ** -5` produced 0.000009999999999999999 on the runner's Node and
+ * 0.000010000000000000000818 (the literal) on the development machine, one ULP apart. That matters
+ * beyond a failing assertion, because mintick is the unit of nearly all price arithmetic here —
+ * spreads in points, stop distances, tick snapping — so a mintick that drifts by an ULP makes
+ * backtest results depend on which Node built them.
+ */
+function tickForDigits(digits: number): number {
+  return Number(`1e-${String(digits)}`);
+}
+
 function fx(pair: string, opts: FxOptions = {}): SymbolSpec {
   const digits = opts.digits ?? 5;
-  const mintick = 10 ** -digits;
+  const mintick = tickForDigits(digits);
   return {
     symbol: pair,
     assetClass: 'fx',

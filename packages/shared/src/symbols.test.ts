@@ -148,3 +148,37 @@ describe('contract specifications', () => {
     expect(() => getSeedSymbol('NOPE99')).toThrow(/Unknown symbol/);
   });
 });
+
+/**
+ * Tick sizes must be bit-exact and engine-independent.
+ *
+ * CI caught the reason this block exists: `mintick` was `10 ** -digits`, and exponentiation is
+ * implementation-approximated in ECMAScript. The runner's Node produced 0.000009999999999999999
+ * where the development machine produced the literal `1e-5` — one ULP apart, on the unit that
+ * nearly all price arithmetic here is denominated in, so backtest numbers depended on which Node
+ * built them.
+ */
+describe('tick sizes are bit-exact across engines', () => {
+  it('gives 5-digit fx exactly the 1e-5 double', () => {
+    // `toBe`, not `toBeCloseTo`: bit equality with the decimal literal IS the invariant.
+    expect(getSeedSymbol('EURUSD').mintick).toBe(0.00001);
+    expect(getSeedSymbol('GBPUSD').mintick).toBe(0.00001);
+  });
+
+  it('gives 3-digit JPY pairs exactly the 1e-3 double', () => {
+    expect(getSeedSymbol('USDJPY').mintick).toBe(0.001);
+    expect(getSeedSymbol('EURJPY').mintick).toBe(0.001);
+  });
+
+  it('matches the decimal literal for every seeded symbol, whatever its digits', () => {
+    for (const s of SEED_SYMBOLS) {
+      expect(s.mintick, s.symbol).toBe(Number(`1e-${String(s.digits)}`));
+    }
+  });
+
+  it('never depends on exponentiation for a tick', () => {
+    // The trap, pinned. If this ever fails the engine changed and the guarantee needs re-checking.
+    expect(Number('1e-5')).toBe(0.00001);
+    expect(Number('1e-3')).toBe(0.001);
+  });
+});
