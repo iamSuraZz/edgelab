@@ -1,7 +1,11 @@
 import { findSymbolByCode, listSymbols, readM1, readRun, type DbClient } from '@edgelab/db';
-import { PineTsEngine, orchestrateRun } from '@edgelab/engine';
+import { PineTsEngine, orchestrateRun, parsePineTimeframe } from '@edgelab/engine';
+import type { SecurityCall } from '@edgelab/engine';
+import { resample } from '@edgelab/data';
 import {
   BUILT_IN_CHECKS,
+  bucketsFromCandles,
+  checkCausality,
   cutoffsFor,
   estimateSameBarBias,
   pickDonor,
@@ -14,11 +18,18 @@ import {
   verdictHeadline,
   type CheckResult,
   type LintResult,
+  type CausalityResult,
   type PrefixInvarianceResult,
   type SameBarBiasEstimate,
   type Verdict,
 } from '@edgelab/validation';
-import { CostConfigSchema, DEFAULT_COSTS, timeframeMs, type Timeframe } from '@edgelab/shared';
+import {
+  CostConfigSchema,
+  DEFAULT_COSTS,
+  timeframeMs,
+  type Bar,
+  type Timeframe,
+} from '@edgelab/shared';
 
 import { assertSingleFeed } from '../ingest/feed-guard';
 
@@ -154,7 +165,9 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
   };
 
   report(10, 'running the full range');
-  const full = await orchestrateRun(shared);
+  // Recording is on for THIS run only. The truncated and spliced runs below re-execute the same
+  // strategy many times over and have no use for the log, so they should not pay for it.
+  const full = await orchestrateRun({ ...shared, recordSecurityCalls: true });
 
   /* --------------------------------------------------- prefix invariance */
 
@@ -253,6 +266,14 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
           },
         });
 
+  /* ------------------------------------------------- causality (A1a) */
+
+  const causality = judgeCausality({
+    calls: full.engineResult.securityCalls,
+    m1,
+    chartBarMs: tfMs,
+  });
+
   /* --------------------------------------------------------- the checks */
 
   report(90, 'judging');
@@ -261,6 +282,7 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
     lintResult(lint),
     prefixResult(prefix, cutoffs.length),
     spliceResult(splice, cutoffs.length, spliceSkipped),
+    causality,
     ...runChecks(BUILT_IN_CHECKS, {
       bars: full.engineResult.bars,
       timeframe,
@@ -501,6 +523,141 @@ function spliceResult(
       'cutoffs when only the future was replaced, with no comparison margin. Unlike the truncation ' +
       'test, this does rule out a bounded look-ahead such as request.security with lookahead_on.',
     evidence: { cutoffs: cutoffCount, usableCutoffs: splice.usableCutoffs, margin: 0 },
+  };
+}
+
+/**
+ * The causality verdict (A1a).
+ *
+ * Where the other look-ahead layers establish THAT a leak exists, this one says WHICH read caused
+ * it: for each `request.security` call it attributes the returned value to a higher-timeframe
+ * bucket and asks whether that bucket had closed by the chart bar's own close. A value that could
+ * only have come from a bucket still forming is the leak, pinpointed at a bar and a call site.
+ *
+ * Judged at the bar's CLOSE, not its open: `lookahead_off` legitimately returns a bucket's value on
+ * the chart bar where that bucket closes, and judging at the open would report every honest HTF
+ * strategy as leaky.
+ */
+function judgeCausality(params: {
+  readonly calls: readonly SecurityCall[] | null;
+  readonly m1: readonly Bar[];
+  readonly chartBarMs: number;
+}): CheckResult {
+  const base = {
+    id: 'lookahead-causality',
+    label: 'Look-ahead (request.security causality)',
+    severity: 'critical' as const,
+  };
+
+  if (params.calls === null) {
+    const reason =
+      'The instrumentation seam was not installed, so no request.security call was observed. This ' +
+      'is "we were not watching", not "nothing was wrong".';
+    return { ...base, status: 'n/a', detail: reason, inconclusiveReason: reason };
+  }
+
+  if (params.calls.length === 0) {
+    return {
+      ...base,
+      status: 'pass',
+      detail:
+        'The script makes no request.security calls, so it has no higher-timeframe read to leak through.',
+      evidence: { calls: 0 },
+    };
+  }
+
+  /*
+   * One verdict per requested timeframe, because attribution needs that timeframe's buckets. A
+   * script reading both H4 and D1 gets each judged against its own series; merging them would make
+   * every value ambiguous against the other's buckets.
+   */
+  const byTimeframe = new Map<string, SecurityCall[]>();
+  for (const call of params.calls) {
+    const list = byTimeframe.get(call.timeframe) ?? [];
+    list.push(call);
+    byTimeframe.set(call.timeframe, list);
+  }
+
+  const results: { tf: string; result: CausalityResult }[] = [];
+  const unparsed: string[] = [];
+
+  for (const [pineTf, calls] of byTimeframe) {
+    const tf = parsePineTimeframe(pineTf);
+    if (tf === null) {
+      unparsed.push(pineTf);
+      continue;
+    }
+    const buckets = bucketsFromCandles(resample(params.m1, tf));
+    results.push({
+      tf: pineTf,
+      result: checkCausality(calls, buckets, { chartBarMs: params.chartBarMs }),
+    });
+  }
+
+  const leaky = results.filter((r) => r.result.verdict === 'leaky');
+  if (leaky.length > 0) {
+    const worst = leaky[0]!;
+    const first = worst.result.leaks[0]!;
+    return {
+      ...base,
+      status: 'fail',
+      detail:
+        `On bar ${String(first.bar)} a request.security("${worst.tf}") call returned ` +
+        `${String(first.value)}, which matches only the bucket closing at ` +
+        `${new Date(first.bucketCloseTime).toISOString()} — ` +
+        `${String(Math.round(first.aheadByMs / 60_000))} minutes after that chart bar closed. The ` +
+        'value could not have been known yet.',
+      evidence: {
+        timeframe: worst.tf,
+        bar: first.bar,
+        barCloseTime: new Date(first.barCloseTime).toISOString(),
+        bucketCloseTime: new Date(first.bucketCloseTime).toISOString(),
+        aheadByMinutes: Math.round(first.aheadByMs / 60_000),
+        leakingBars: worst.result.leaks.length,
+        barsJudged: worst.result.barsJudged,
+      },
+    };
+  }
+
+  if (unparsed.length > 0 || results.length === 0) {
+    const reason =
+      `Could not attribute calls for timeframe(s) ${unparsed.join(', ') || '(none parsed)'}, so ` +
+      'causality was not established for them.';
+    return { ...base, status: 'n/a', detail: reason, inconclusiveReason: reason };
+  }
+
+  const inconclusive = results.filter((r) => r.result.verdict === 'inconclusive');
+  if (inconclusive.length > 0) {
+    const worst = inconclusive[0]!;
+    const reason =
+      `Values from request.security("${worst.tf}") matched too many buckets to attribute — ` +
+      `${String(worst.result.barsAmbiguous)} of ${String(worst.result.barsJudged)} judged bars were ` +
+      'ambiguous. A boolean or flat series matches half the chart, so this says nothing either way.';
+    return {
+      ...base,
+      status: 'n/a',
+      detail: reason,
+      inconclusiveReason: reason,
+      evidence: {
+        timeframe: worst.tf,
+        barsAmbiguous: worst.result.barsAmbiguous,
+        barsJudged: worst.result.barsJudged,
+      },
+    };
+  }
+
+  const judged = results.reduce((n, r) => n + r.result.barsJudged, 0);
+  return {
+    ...base,
+    status: 'pass',
+    detail:
+      `Every attributable request.security value came from a bucket that had already closed — ` +
+      `${String(judged)} bars judged across ${String(results.length)} timeframe(s).`,
+    evidence: {
+      calls: params.calls.length,
+      barsJudged: judged,
+      timeframes: results.map((r) => r.tf).join(', '),
+    },
   };
 }
 

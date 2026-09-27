@@ -170,8 +170,8 @@ roadmap's "in the browser" is NOT met.
 | CI on the public repo (A9)                                         | see badge / Actions tab      |
 | Exness imports + MT5 parity test (A12)                             | **NOT PLANNED** — no exports |
 
-Still to build in step 1, in this order: **wire the causality layer** through the adapter's
-instrumentation seam, then execution bias, OOS + walk-forward, timeframe matrix + regimes, and Monte
+Still to build in step 1, in this order: **execution bias** (fill audit, M1 ambiguity replay,
+bid/ask asymmetry, cost stress), then OOS + walk-forward, timeframe matrix + regimes, and Monte
 Carlo. Each must run through `pnpm validate` on the 2022 data before the next starts.
 
 **The look-ahead family is complete and verified on the 2022 acceptance data** (EURUSD H1,

@@ -51,6 +51,8 @@ export interface OrchestrateParams {
   readonly rfAnnual?: number;
   /** Hide data at or after this instant on every timeframe (prefix-invariance testing). */
   readonly dataCutoffTs?: number;
+  /** Record every `request.security` call, for the causality check (A1a). */
+  readonly recordSecurityCalls?: boolean;
   /** Progress callback, so a worker can stream SSE updates. */
   readonly onProgress?: (percent: number, message: string) => void;
   /**
@@ -136,6 +138,7 @@ export async function orchestrateRun(params: OrchestrateParams): Promise<Orchest
     overrides: { initial_capital: engineCapital, ...params.overrides },
     ...(params.warmupBars === undefined ? {} : { warmupBars: params.warmupBars }),
     ...(params.dataCutoffTs === undefined ? {} : { dataCutoffTs: params.dataCutoffTs }),
+    ...(params.recordSecurityCalls === true ? { recordSecurityCalls: true } : {}),
   });
   const engineMs = Date.now() - engineStartedAt;
 

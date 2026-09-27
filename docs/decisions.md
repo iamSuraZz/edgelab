@@ -732,3 +732,47 @@ overlapping data.
 invariance is structurally blind to a bounded leak. Future splice is the one look-ahead layer whose
 clean result is a positive statement: at these cutoffs, on this data, the strategy demonstrably read
 nothing it should not have.
+
+## A1a causality — wired (2026-09-28)
+
+The look-ahead family is now complete. All four layers, on the 2022 acceptance data:
+
+| layer                            | lookahead-leak                        | lookahead-off           |
+| -------------------------------- | ------------------------------------- | ----------------------- |
+| static lint                      | **fail** (line 8)                     | pass                    |
+| prefix invariance (A1)           | pass 6/6                              | pass 6/6                |
+| future splice (A1b)              | **fail** (trade 97, exitBar 468→467)  | pass 6/6                |
+| request.security causality (A1a) | **fail** (bar 0, bucket 60 min ahead) | pass, 3,070 bars judged |
+
+Each layer earns its place by what it says that the others cannot.
+
+- The **lint** reads source: instant, a line number, and blind to anything it does not recognise.
+- **Prefix invariance** catches UNBOUNDED leaks (`last_bar_index`, `barstate.islast`, whole-series
+  normalisation) and provably misses bounded ones.
+- **Future splice** catches bounded leaks behaviourally and is the only layer whose PASS is a
+  positive statement.
+- **Causality** is the only layer that says WHICH read leaked: "on bar 0 a `request.security("240")`
+  call returned 1.13727, which matches only the bucket closing 60 minutes after that chart bar
+  closed". The others prove a leak exists; this one hands you the call site.
+
+**The seam is installed inside `instrument()`, not by the adapter.** The `_prepared` handling is the
+fragile part — `prepare()` must return the cached object by reference or the patch silently stops
+reaching the runtime — and exactly one place should know it. The two seams compose: `strategy.*` and
+`request.security` are different namespaces, and the security interceptor wraps the already
+instrumented function, so both patches land on the same Context in one pass.
+
+**Recording is off by default and on only for the single full run.** The truncated and spliced runs
+re-execute the strategy a dozen times and have no use for the log.
+
+**The adapter awaits `settle()` before reading the log.** `request.security` returns a Promise, so
+the interceptor records a pending value and fills it in on resolution; reading early would report
+every call as `value: null` and the check would see nothing but unmatched observations.
+
+**Three outcomes are kept distinct, and the distinction is the point.** `null` calls means the seam
+was never installed — "we were not watching", reported `n/a`. An empty log means it WAS watching and
+the script made no calls — reported `pass`, verified against ema-cross. And values matching too many
+buckets is `n/a` with the count, because a boolean or flat series matches half the chart and says
+nothing either way.
+
+One verdict per requested timeframe: a script reading both H4 and D1 is judged against each series
+separately, since merging them would make every value ambiguous against the other's buckets.

@@ -1,3 +1,5 @@
+import type { SecurityCall } from './pinets/security-log';
+
 import type { Bar, SymbolSpec, Timeframe, TradeSide } from '@edgelab/shared';
 
 /**
@@ -129,6 +131,13 @@ export interface RunParams {
    * data the strategy would otherwise be able to read.
    */
   readonly dataCutoffTs?: number;
+  /**
+   * Record every `request.security` call, for the look-ahead causality check (A1a).
+   *
+   * Off by default: a normal backtest has no use for the log and should not pay for intercepting
+   * every call. The validator turns it on.
+   */
+  readonly recordSecurityCalls?: boolean;
   /** Wall-clock ceiling for the run. */
   readonly timeoutMs?: number;
   readonly onProgress?: (percent: number, message: string) => void;
@@ -216,6 +225,14 @@ export interface RunResult {
   readonly trades: readonly EngineTrade[];
   readonly plots: readonly PlotSeries[];
   readonly orderLog: readonly OrderLogEntry[];
+  /**
+   * Observed `request.security` calls, or null when recording was not requested.
+   *
+   * Null and empty mean different things: null is "we were not watching", empty is "we watched and
+   * the script made no calls". The causality check must report `n/a` for the first and `pass` for
+   * the second, so the distinction cannot be collapsed.
+   */
+  readonly securityCalls: readonly SecurityCall[] | null;
   readonly stats: EngineStats;
   /** Runtime warnings the script produced, already shaped as diagnostics. */
   readonly diagnostics: readonly Diagnostic[];

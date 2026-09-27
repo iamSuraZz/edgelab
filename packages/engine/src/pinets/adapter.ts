@@ -189,6 +189,7 @@ export class PineTsEngine implements PineEngine {
     // may open before the requested start.
     const instrumentation: Instrumentation = instrument(ind, {
       ...(warmupBars > 0 ? { tradingWindowStartMs: params.fromMs } : {}),
+      ...(params.recordSecurityCalls === true ? { recordSecurityCalls: true } : {}),
     });
 
     const provider = new ResamplingPineProvider({
@@ -221,6 +222,11 @@ export class PineTsEngine implements PineEngine {
     // Surface it here so the job fails loudly instead of returning partial data.
     const providerError = provider.firstError();
     if (providerError !== undefined) throw providerError;
+
+    // `request.security` returns a Promise, so the interceptor records a pending value and fills it
+    // in on resolution. Reading the log before those settle would report every call as `value: null`
+    // and the causality check would see nothing but unmatched observations.
+    await instrumentation.securityLog?.settle();
 
     params.onProgress?.(90, 'mapping results');
 
@@ -258,6 +264,7 @@ export class PineTsEngine implements PineEngine {
       trades,
       plots,
       orderLog: instrumentation.orderLog,
+      securityCalls: instrumentation.securityLog?.calls ?? null,
       stats,
       diagnostics: (ctx.warnings ?? []).map((w) => ({
         line: null,

@@ -1,3 +1,5 @@
+import { interceptSecurity, type SecurityLog } from './security-log';
+
 import type { OrderLogEntry, OrderOutcome } from '../pine-engine';
 import { InstrumentationUnavailableError } from '../pine-engine';
 
@@ -117,10 +119,27 @@ export interface InstrumentOptions {
    * index, so the cutoff is invariant under resampling. Omit to disable gating.
    */
   readonly tradingWindowStartMs?: number;
+  /**
+   * Also record every `request.security` call, for the look-ahead causality check (A1a).
+   *
+   * Installed HERE rather than by the caller because the `_prepared` handling above is the fragile
+   * part — prepare() must return the cached object by reference or a patch silently stops reaching
+   * the runtime — and there should be exactly one place that knows it. Off by default: a normal
+   * backtest has no use for the log and should not pay for intercepting every call.
+   */
+  readonly recordSecurityCalls?: boolean;
 }
 
 export interface Instrumentation {
   readonly orderLog: OrderLogEntry[];
+  /**
+   * `request.security` observations, when `recordSecurityCalls` was set.
+   *
+   * Null when not requested — distinct from an empty log, which means the seam WAS installed and the
+   * script simply made no calls. The causality check needs that distinction: it must report `n/a`
+   * when it was never watching, and `pass` when it watched and saw nothing wrong.
+   */
+  readonly securityLog: SecurityLog | null;
   /** Calls suppressed by the gate. */
   suppressed(): number;
   /** Calls that went through but produced no order. */
@@ -273,10 +292,19 @@ export function instrument(indicator: unknown, options: InstrumentOptions = {}):
     return userFn(rawCtx);
   };
 
-  ind._prepared.fn = wrapper;
+  /*
+   * Compose the two seams rather than choosing between them. They patch different namespaces —
+   * `strategy.*` here, `request.security` there — and the security interceptor wraps the ALREADY
+   * instrumented function so both patches are installed on the same Context, in one pass, on the
+   * first bar.
+   */
+  const security = options.recordSecurityCalls === true ? interceptSecurity(wrapper) : null;
+
+  ind._prepared.fn = security === null ? wrapper : security.wrapped;
 
   return {
     orderLog,
+    securityLog: security?.log ?? null,
     suppressed: () => orderLog.filter((r) => r.outcome === 'suppressed').length,
     noops: () => orderLog.filter((r) => r.outcome === 'noop').length,
   };
