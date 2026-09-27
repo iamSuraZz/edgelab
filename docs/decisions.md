@@ -661,3 +661,25 @@ to republish.
 If a real export ever arrives, the primitive it needs is already built and tested —
 `ensureFeedSymbol` creates `EURUSD.exness` sharing EURUSD's instrument metadata — and the work is
 wiring the importer to it plus the parity test. Until then it is not on the list.
+
+### A10 addendum · the two-year gate is cleared
+
+Done: `EURUSD.twelvedata` holds 664,720 M1 bars, 2022-01-02 .. 2024-02-07. Over the acceptance
+window 2022-01-01..2024-01-01 that is 623 trading days with **no gap longer than four days**, fetched
+in 148 requests in 18 minutes — well inside the free 800/day budget.
+
+### A13 · CI found a bug local runs could not
+
+The first green CI run cost four attempts, and the third failure was worth the whole exercise:
+`mintick = 10 ** -digits` produced 0.000009999999999999999 on the runner's Node and the literal
+`1e-5` here, one ULP apart. Exponentiation is _implementation-approximated_ in ECMAScript;
+string-to-number conversion is exactly specified. Since mintick is the unit of nearly all price
+arithmetic in this repo, backtest results depended on which Node built them.
+
+That is precisely the class of defect a single-machine project cannot find, and it argues for keeping
+CI green as a gate rather than a decoration.
+
+Two smaller CI notes. `pnpm/action-setup` fails if given a `version` input while package.json pins
+`packageManager` — let it read the pin. And job logs need repository admin rights even on a public
+repo, so the workflow emits test failures as **annotations** (`--reporter=github-actions`), which are
+readable without auth and show inline on the diff.

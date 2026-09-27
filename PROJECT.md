@@ -133,8 +133,13 @@ CI runs all five checks on every push — see `.github/workflows/ci.yml`.
 | BTCUSD            | 10,080  | 2024-01-01..08       | binance    |
 | EURUSD.twelvedata | 6,238   | 2024-02-01..07       | twelvedata |
 
-**Acceptance data for slice D is the contiguous 2022-01..06 EURUSD** (185,122 bars). Binance and
-Twelve Data supply no spread, so bars from them fall back to `symbol.defaultSpreadPoints`.
+**Slice D's two-year gate is CLEARED (A10).** `EURUSD.twelvedata` holds 2022-01-02 .. 2024-02-07 —
+623 trading days over 2022-01-01..2024-01-01 with **no gap longer than four days**, fetched in 148
+requests inside the free 800/day budget. That feed is the target of the two-year acceptance run.
+
+The contiguous 2022-01..06 dukascopy EURUSD (185,122 bars) remains the working set for building each
+check. Binance and Twelve Data supply no spread, so bars from them fall back to
+`symbol.defaultSpreadPoints` — correct, but it means cost figures are not comparable across feeds.
 
 **The two-year acceptance feed is `EURUSD.twelvedata` (A10), not the dukascopy series.** Twelve
 Data's earliest EUR/USD 1min bar is 2020-04-07, so it reaches the window; `/earliest_timestamp`
