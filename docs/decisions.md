@@ -589,3 +589,75 @@ reading or writing it.
 
 **Still pending, and now the honest blocker for slice D's two-year gate:** the backfill cannot get
 past 2022-07 while the block holds. The six contiguous months of 2022 are the acceptance data.
+
+## Public repo and CI (2026-09-28)
+
+### A9 · CI runs on synthetic bars, never a provider
+
+The five checks (lint, typecheck, test, test:e2e, test:smoke) run on TimescaleDB and Redis service
+containers with **no secrets at all**, and `TWELVEDATA_API_KEY` is set to the empty string
+deliberately — that disables the adapter, so nothing in CI can reach an external provider.
+
+It has to be that way round rather than "be careful not to call one". Dukascopy is rate-limiting us
+outright, and Twelve Data's free tier is 800 requests a day shared with real work; a per-push job
+would burn it on the first busy afternoon and make the budget useless for the thing it exists for.
+Vendor bars are also not ours to commit to a public repo.
+
+So CI seeds `packages/data/src/synthetic.ts` — deterministic bars from two superimposed sines plus a
+drift. The shape is not decoration: both suites assert EURUSD has more than 10,000 stored bars AND
+that a strategy actually trades (the smoke test clicks a trade), so a flat or monotonic series would
+pass the precondition and then fail everything downstream in ways that look like engine bugs. The
+generator also never emits a bar that is both flat and zero-volume, because D4 treats those as filler
+and drops them — a naive generator produces a series that is silently discarded at import.
+
+Stored under source `synthetic`, which puts it under the one-feed rule (A6): seeding into a symbol
+that already holds real bars is refused rather than quietly creating a mixed series.
+
+**No unit test needed skipping.** Checked rather than assumed: no `.test.ts` in the repo performs a
+network call, so "skip any test that needs a real provider" had nothing to act on.
+
+### A10 · Twelve Data is the two-year acceptance feed
+
+`/earliest_timestamp` for EUR/USD at 1min returns **2020-04-07 16:54**, which reaches well past
+2022-01-01. So plan B is live: `EURUSD.twelvedata` is being backfilled 2022-01-01 → 2024-01-01 and
+becomes the target of slice D's two-year acceptance run.
+
+Budget arithmetic: ~750k M1 bars at 5,000 per request is ~150 requests against a 800/day limit, so it
+fits inside one day. `api_usage` confirmed 795 credits free when it started.
+
+Dukascopy stays the canonical `EURUSD` series and keeps its nightly job. Twelve Data supplies no
+spread, so runs on that feed fall back to `symbol.defaultSpreadPoints` — which is correct behaviour,
+but it does mean cost figures are not comparable between the two feeds.
+
+An aside worth recording because it cost real time: a naive `cut -d=` on the `.env` line produced a
+97-character "key" and a 401. The line carries an inline comment; `process.loadEnvFile` strips it and
+a shell split does not. Also confirmed `process.loadEnvFile` does NOT override an existing shell
+variable, so config CAN be overridden per-command locally.
+
+### A11 · A blocked source says so, rather than exiting zero forever
+
+One `rate-limited` night is normal and exiting zero is right for it. A STREAK is different
+information — the source is blocked, not busy — and a job that reports success every morning is
+exactly how nobody notices.
+
+After **three** consecutive rate-limited runs, `pnpm backfill` and `GET /api/data/coverage` both show
+`<provider> blocked since <date>`. Three is long enough that a weekend maintenance window does not
+trip it and short enough to notice within a working week. One success resets the streak.
+
+Coverage carries it because coverage shows which bars exist and cannot say why the rest do not; after
+three nights that distinction is the only thing worth reading.
+
+### A12 · Exness imports and the MT5 parity test are NOT PLANNED
+
+`packages/data/fixtures/exness-mt5/` and `.../exness-ticks/` do not exist and never have. The tick
+importer's column aliases have carried a `NOTE (flagged for confirmation)` since phase 02 and cannot
+be resolved against nothing.
+
+Closed as **not planned** rather than left open. It has been flagged in every status table for
+several sessions, and a permanent "blocked" row is indistinguishable from noise. Both directories are
+now gitignored: broker and provider data stays local, because it is licensed vendor data and not ours
+to republish.
+
+If a real export ever arrives, the primitive it needs is already built and tested —
+`ensureFeedSymbol` creates `EURUSD.exness` sharing EURUSD's instrument metadata — and the work is
+wiring the importer to it plus the parity test. Until then it is not on the list.

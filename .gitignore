@@ -37,3 +37,9 @@ Thumbs.db
 apps/web/test-results/
 apps/web/playwright-report/
 apps/web/blob-report/
+
+# Broker and provider market data stays LOCAL. These directories hold Exness MT5 and tick
+# exports, which are licensed vendor data — not ours to republish — and large. Any test that
+# needs them skips when they are absent.
+packages/data/fixtures/exness-mt5/
+packages/data/fixtures/exness-ticks/

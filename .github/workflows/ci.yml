@@ -1,0 +1,140 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A second push supersedes the first: these jobs boot a database, a browser and a worker pool, and
+# queueing them up behind each other gains nothing.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: lint, typecheck, unit, e2e, smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    # The same images docker-compose.yml uses locally, pinned. TimescaleDB rather than plain
+    # Postgres because the schema creates a hypertable with a compression policy, and that is not
+    # optional — `pnpm db:migrate` fails outright without the extension.
+    services:
+      db:
+        image: timescale/timescaledb:2.17.2-pg17
+        env:
+          POSTGRES_USER: edgelab
+          POSTGRES_PASSWORD: edgelab
+          POSTGRES_DB: edgelab
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U edgelab -d edgelab"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      # NO SECRETS, and none are needed. Every value here is either a local service or a
+      # deliberately empty provider key.
+      DATABASE_URL: postgresql://edgelab:edgelab@localhost:5432/edgelab
+      REDIS_URL: redis://localhost:6379
+      ACCOUNT_CURRENCY: USD
+      API_PORT: 3001
+      WEB_PORT: 5173
+      DATA_CACHE_DIR: /tmp/edgelab-cache
+      # Empty ON PURPOSE. It disables the Twelve Data adapter, so nothing in CI can reach an
+      # external provider: Dukascopy is rate-limiting us outright, and Twelve Data's free tier is
+      # 800 requests a day that a per-push job would burn on the first busy afternoon.
+      TWELVEDATA_API_KEY: ''
+      CI: 'true'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # ---- static checks first: they need no services and fail fastest ----
+
+      - name: lint
+        run: pnpm lint
+
+      - name: typecheck
+        run: pnpm typecheck
+
+      # ---- unit suite: no database, no network ----
+
+      - name: test
+        run: pnpm test
+
+      # ---- everything below needs the stack ----
+
+      - name: migrate
+        run: pnpm db:migrate
+
+      # Synthetic, deterministic bars. The e2e and smoke suites both assert EURUSD has more than
+      # 10,000 stored bars AND that a strategy actually trades, so an empty database or a flat
+      # series fails them for reasons that look like engine bugs.
+      - name: seed synthetic bars
+        run: pnpm run data:seed-synthetic EURUSD 2024-01-01 2024-02-01
+
+      - name: test:e2e
+        run: pnpm test:e2e
+
+      - name: install chromium
+        run: pnpm --filter @edgelab/web exec playwright install --with-deps chromium
+
+      # The smoke suite drives the real UI against the real API, so both have to be up. Playwright's
+      # own webServer starts Vite only; the API and worker come from `pnpm dev`, which turbo keeps
+      # running, so it is backgrounded and polled rather than awaited.
+      - name: start api and worker
+        run: |
+          pnpm dev > dev.log 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -sf "http://localhost:${API_PORT}/health" > /dev/null; then
+              echo "api up after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "api did not come up; last 80 lines of dev.log:"
+          tail -80 dev.log
+          exit 1
+
+      - name: test:smoke
+        run: pnpm test:smoke
+
+      # Failure artefacts. Without these a red CI run on a browser test is almost unactionable —
+      # the screenshot and trace are the whole diagnosis.
+      - name: upload failure artefacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failure-artefacts
+          path: |
+            dev.log
+            apps/web/test-results/**
+            apps/web/playwright-report/**
+          retention-days: 7
+          if-no-files-found: ignore

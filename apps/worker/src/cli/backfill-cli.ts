@@ -3,6 +3,8 @@ import {
   createDbClient,
   finishIngestAttempt,
   findSymbolByCode,
+  blockedNotice,
+  rateLimitStreak,
   recentIngestAttempts,
   startIngestAttempt,
   updateIngestAttempt,
@@ -104,6 +106,16 @@ async function main(): Promise<void> {
         ? `nothing stored in range yet; starting at ${fromIso}\n`
         : `contiguous through ${new Date(before.last).toISOString().slice(0, 10)}; resuming there\n`,
     );
+
+    // A streak of refusals is different information from one refusal, and a job that exits zero
+    // every morning is exactly how nobody notices. Reported before the attempt as well as after,
+    // so the banner shows even on a night that fails immediately.
+    const notice = blockedNotice(provider, await rateLimitStreak(db, symbol.id, provider));
+    if (notice !== null)
+      process.stdout.write(`
+!! ${notice}
+
+`);
 
     const history = await recentIngestAttempts(db, symbol.id, 3);
     for (const h of history) {

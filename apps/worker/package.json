@@ -15,7 +15,8 @@
     "backtest": "tsx src/cli/backtest-cli.ts",
     "validate": "tsx src/cli/validate-cli.ts",
     "data:split-feed": "tsx src/cli/split-feed-cli.ts",
-    "backfill": "tsx src/cli/backfill-cli.ts"
+    "backfill": "tsx src/cli/backfill-cli.ts",
+    "data:seed-synthetic": "tsx src/cli/seed-synthetic-cli.ts"
   },
   "dependencies": {
     "@edgelab/data": "workspace:*",

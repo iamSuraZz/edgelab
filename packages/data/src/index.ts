@@ -12,3 +12,4 @@ export * from './providers/binance';
 export * from './importers/detect';
 export * from './importers/mt5-csv';
 export * from './importers/exness-ticks';
+export * from './synthetic';

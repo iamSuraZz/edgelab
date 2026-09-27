@@ -95,7 +95,8 @@ pnpm run import:file mt5 EURUSD <abs.csv> 120        # 120 = broker server UTC o
 
 ## Current status — NOT v1.0
 
-Green: `build` 9/9, `typecheck` 16/16, `lint` clean, **671 tests** (`pnpm test`).
+Green: `build` 9/9, `typecheck` 16/16, `lint` clean, **681 tests** (`pnpm test`).
+CI runs all five checks on every push — see `.github/workflows/ci.yml`.
 
 **Verified against the real docker stack:**
 
@@ -135,16 +136,13 @@ Green: `build` 9/9, `typecheck` 16/16, `lint` clean, **671 tests** (`pnpm test`)
 **Acceptance data for slice D is the contiguous 2022-01..06 EURUSD** (185,122 bars). Binance and
 Twelve Data supply no spread, so bars from them fall back to `symbol.defaultSpreadPoints`.
 
-**PENDING — slice D's final gate is the two-year run, and the backfill cannot reach it.**
-`pnpm backfill EURUSD dukascopy 2022-01-01 2024-02-01` resumes correctly at 2022-07 and then takes
-HTTP 429 on its FIRST request, so the block is longer-lived than one session and no pacing avoids
-it. Run it nightly; it records `rate-limited` and exits zero, and each run resumes.
+**The two-year acceptance feed is `EURUSD.twelvedata` (A10), not the dukascopy series.** Twelve
+Data's earliest EUR/USD 1min bar is 2020-04-07, so it reaches the window; `/earliest_timestamp`
+confirmed it. The backfill of 2022-01-01 → 2024-01-01 runs inside the free 800/day budget.
 
-> **BLOCKED — slice D still needs two years of EURUSD H1.** Only 2022-01..06 plus 2024-01..02 is
-> stored. The gap is **Dukascopy rate-limiting**, not our code: the backfill resumes correctly at
-> 2022-07 (proof that the resume fix works on real data) and then takes HTTP 429 through all six
-> backoff attempts up to 160s. Re-run `pnpm ingest EURUSD dukascopy 2022-01-01 2024-02-01`
-> repeatedly; it is resumable and each attempt makes progress.
+Dukascopy remains the canonical `EURUSD` series and keeps its nightly job. After three consecutive
+rate-limited nights, `pnpm backfill` and `GET /api/data/coverage` report
+`dukascopy blocked since <date>` (A11) rather than only exiting zero.
 
 > Playwright's own `chromium_headless_shell-1208` download is corrupt on this machine (it extracted
 > to `ABOUT`/`LICENSE` only — most likely antivirus). Run the browser tests with
@@ -158,14 +156,14 @@ it. Run it nightly; it records `rate-limited` and exits zero, and each run resum
 verified on real data. Steps 2 (endpoint + SSE) and 3 (Integrity tab) are not started, so the
 roadmap's "in the browser" is NOT met.
 
-| prerequisite                                                       | state                         |
-| ------------------------------------------------------------------ | ----------------------------- |
-| One feed per series; mixed-range runs refused (A6)                 | done, proven on real data     |
-| `pnpm run data:split-feed` — stray Twelve Data week moved out      | done                          |
-| `pnpm backfill` — paced, resumable, `rate-limited` exits zero (A7) | done                          |
-| Nest boot guard — 2 assertions, both mutation-verified (A8)        | done                          |
-| File imports routed through `ensureFeedSymbol`                     | **primitive built, unwired**  |
-| CI                                                                 | **not added — no git remote** |
+| prerequisite                                                       | state                        |
+| ------------------------------------------------------------------ | ---------------------------- |
+| One feed per series; mixed-range runs refused (A6)                 | done, proven on real data    |
+| `pnpm run data:split-feed` — stray Twelve Data week moved out      | done                         |
+| `pnpm backfill` — paced, resumable, `rate-limited` exits zero (A7) | done                         |
+| Nest boot guard — 2 assertions, both mutation-verified (A8)        | done                         |
+| CI on the public repo (A9)                                         | see badge / Actions tab      |
+| Exness imports + MT5 parity test (A12)                             | **NOT PLANNED** — no exports |
 
 Still to build in step 1, in this order: **A1b future-splice** (the leaky fixture currently escapes
 prefix invariance — see the box below), then wire the causality layer through the adapter's
@@ -241,7 +239,7 @@ pnpm backtest --fixture ema-cross --symbol EURUSD --tf H1 --from 2024-01-01 --to
 
 What is verified, phase by phase, with the evidence: **`docs/verified.md`**.
 
-Open questions: the **Exness tick layout** (no sample file), and whether the validation
+Open questions: whether the validation
 sample-size guard should report `n/a` rather than `fail` on structurally short walk-forward
 segments. _Settled:_ W1 anchor and fx session DST by D2/D3; `strategy.*` inside
 `request.security_lower_tf` by D1 — `compile()` now rejects that combination.
@@ -267,13 +265,13 @@ The rest of slice E — the Data page and the dashboard completion — is not st
 | Wire it into `orchestrateRun`; remove the D6 guard                                              | **done, hand-verified** |
 | Data page (spec 02): provider cards, download form, drop-zone, coverage heatmap, candle preview | **not started**         |
 | Exercise Twelve Data and Binance on real data                                                   | **done**                |
-| Exness tick importer                                                                            | **blocked** — no sample |
+| Exness tick importer                                                                            | **NOT PLANNED** (A12)   |
 | Dashboard: monthly heatmap, cost waterfall, TV Sharpe on screen, JSON export, print stylesheet  | **not started**         |
 
-**`packages/data/fixtures/exness-ticks/sample.csv` does not exist** — nor does
-`packages/data/fixtures/`. The slice-E brief assumed it was there. Until a real Exness export is
-dropped in, the tick importer's column aliases cannot be fixed against anything, and the Exness
-layout stays the open question it has been since phase 02.
+**Exness imports and the MT5 parity test are NOT PLANNED (A12).** No export has ever existed at
+`packages/data/fixtures/`, both directories are gitignored so vendor data stays local, and a
+permanently "blocked" row is indistinguishable from noise. The primitive is built if one ever
+arrives: `ensureFeedSymbol` creates `EURUSD.exness` sharing EURUSD's instrument metadata.
 
 ### Slice F — what exists, what does not
 

@@ -28,7 +28,8 @@
     "test:smoke": "pnpm --filter @edgelab/web test:smoke",
     "validate": "turbo run build --filter=@edgelab/db --filter=@edgelab/data --filter=@edgelab/metrics --filter=@edgelab/engine --filter=@edgelab/validation && pnpm --filter @edgelab/worker run validate",
     "data:split-feed": "pnpm --filter @edgelab/worker run data:split-feed",
-    "backfill": "turbo run build --filter=@edgelab/db --filter=@edgelab/data && pnpm --filter @edgelab/worker run backfill"
+    "backfill": "turbo run build --filter=@edgelab/db --filter=@edgelab/data && pnpm --filter @edgelab/worker run backfill",
+    "data:seed-synthetic": "turbo run build --filter=@edgelab/db --filter=@edgelab/data && pnpm --filter @edgelab/worker run data:seed-synthetic"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

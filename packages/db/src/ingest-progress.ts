@@ -133,3 +133,62 @@ export async function recentIngestAttempts(
     completedAtMs: r.completed_at === null ? null : fromDbTime(r.completed_at),
   }));
 }
+
+/**
+ * How long a provider has been refusing us.
+ *
+ * A single `rate-limited` night is normal and the nightly job is right to exit zero for it. A STREAK
+ * is different information: it means the source is blocked, not busy, and nobody is going to notice
+ * from a job that reports success every morning. Three nights is the threshold — long enough that a
+ * weekend maintenance window does not trip it, short enough to notice within a working week.
+ *
+ * Counts backwards from the newest attempt and stops at the first non-`rate-limited` one, so a
+ * single success resets the streak. Returns null when the newest attempt was not rate-limited,
+ * because "blocked since" is only meaningful while it is still blocked.
+ */
+export async function rateLimitStreak(
+  client: DbClient,
+  symbolId: string,
+  provider: string,
+): Promise<{ readonly nights: number; readonly sinceMs: number } | null> {
+  const result = await client.pool.query<{ state: string; created_at: Date }>(
+    `SELECT state, created_at FROM ingest_jobs
+      WHERE symbol_id = $1 AND provider = $2
+      ORDER BY created_at DESC LIMIT 30`,
+    [symbolId, provider],
+  );
+
+  const rows = result.rows;
+  if (rows.length === 0 || rows[0]!.state !== 'rate-limited') return null;
+
+  let nights = 0;
+  let sinceMs = fromDbTime(rows[0]!.created_at);
+  for (const row of rows) {
+    if (row.state !== 'rate-limited') break;
+    nights += 1;
+    // Walking newest-first, so each accepted row pushes the start of the streak earlier.
+    sinceMs = fromDbTime(row.created_at);
+  }
+
+  return { nights, sinceMs };
+}
+
+/** Nights of refusal before a streak is worth reporting as a blocked source. */
+export const BLOCKED_AFTER_NIGHTS = 3;
+
+/**
+ * The one-line banner for a blocked source, or null when it is not blocked.
+ *
+ * Built here so the CLI, the coverage endpoint and anything else report it identically.
+ */
+export function blockedNotice(
+  provider: string,
+  streak: { readonly nights: number; readonly sinceMs: number } | null,
+): string | null {
+  if (streak === null || streak.nights < BLOCKED_AFTER_NIGHTS) return null;
+  const since = new Date(streak.sinceMs).toISOString().slice(0, 10);
+  return (
+    `${provider} blocked since ${since} — ${String(streak.nights)} consecutive rate-limited runs. ` +
+    'Pacing cannot help if the first request of a session is refused; the block has to lift.'
+  );
+}

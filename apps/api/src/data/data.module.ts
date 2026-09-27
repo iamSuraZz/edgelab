@@ -20,7 +20,9 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { Queue } from 'bullmq';
 import {
+  blockedNotice,
   coverageForAll,
+  rateLimitStreak,
   copyBarsIgnoreDuplicates,
   bumpDataVersion,
   dailyBarCounts,
@@ -107,8 +109,30 @@ export class DataService {
     return updated;
   }
 
+  /**
+   * Coverage, plus a `blocked` line per symbol whose feed has been refusing us.
+   *
+   * Coverage alone says which bars exist; it cannot say why the rest do not. After three
+   * consecutive rate-limited nights that distinction is the only thing worth reading — the gap is
+   * not "still downloading", it is "the source is blocked" — so it travels with the coverage rather
+   * than being buried in a nightly log nobody opens.
+   */
   async coverage(): Promise<unknown> {
-    return coverageForAll(this.db);
+    const rows = await coverageForAll(this.db);
+
+    return Promise.all(
+      rows.map(async (row) => {
+        const notices: string[] = [];
+        for (const source of row.sources) {
+          const notice = blockedNotice(
+            source,
+            await rateLimitStreak(this.db, row.symbolId, source),
+          );
+          if (notice !== null) notices.push(notice);
+        }
+        return notices.length === 0 ? row : { ...row, blocked: notices };
+      }),
+    );
   }
 
   /** Per-day bar counts, for the calendar heatmap. */
