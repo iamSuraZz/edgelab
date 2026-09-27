@@ -1,0 +1,46 @@
+# syntax=docker/dockerfile:1.7
+#
+# BullMQ worker. Build context is the REPO ROOT:
+#   docker build -f docker/Dockerfile.worker -t edgelab-worker .
+#
+ARG NODE_VERSION=22-alpine
+
+FROM node:${NODE_VERSION} AS base
+ENV PNPM_HOME=/pnpm
+ENV PATH="$PNPM_HOME:$PATH"
+RUN corepack enable && corepack prepare pnpm@11.10.0 --activate
+WORKDIR /app
+
+# `pnpm fetch` populates the store from the LOCKFILE ALONE, so this expensive
+# layer is invalidated only by a dependency change, not by a source edit.
+#
+# Do NOT install here and copy source later: `COPY packages ./packages` would
+# overwrite the node_modules symlink forest pnpm creates inside each package.
+FROM base AS deps
+COPY pnpm-lock.yaml ./
+RUN pnpm fetch
+
+FROM deps AS build
+COPY . .
+RUN pnpm install --frozen-lockfile --offline
+RUN pnpm exec turbo run build --filter=@edgelab/worker...
+
+FROM base AS runtime
+ENV NODE_ENV=production
+RUN addgroup -S edgelab && adduser -S edgelab -G edgelab
+
+COPY --from=build --chown=edgelab:edgelab /app /app
+
+# The Dukascopy on-disk cache lives here and is a named volume in production, so
+# a container restart does not re-download months of history.
+RUN mkdir -p /data/cache && chown -R edgelab:edgelab /data
+ENV DATA_CACHE_DIR=/data/cache
+
+USER edgelab
+
+# The worker has no HTTP surface. Liveness is "the process is up and Redis is
+# reachable"; BullMQ itself surfaces stalled jobs.
+HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \
+  CMD node -e "process.exit(0)"
+
+CMD ["node", "apps/worker/dist/main.js"]

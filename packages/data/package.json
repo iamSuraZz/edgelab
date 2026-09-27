@@ -1,0 +1,23 @@
+{
+  "name": "@edgelab/data",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "clean": "rimraf dist .turbo"
+  },
+  "dependencies": {
+    "@edgelab/shared": "workspace:*",
+    "csv-parse": "7.0.3",
+    "dukascopy-node": "1.50.0",
+    "yauzl": "3.4.0",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@types/yauzl": "3.4.0",
+    "typescript": "6.0.3"
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "ui": "stream",
+  "globalDependencies": ["tsconfig.base.json", ".env"],
+  "globalEnv": [
+    "NODE_ENV",
+    "DATABASE_URL",
+    "REDIS_URL",
+    "TWELVEDATA_API_KEY",
+    "ACCOUNT_CURRENCY",
+    "API_PORT",
+    "WEB_PORT",
+    "DATA_CACHE_DIR"
+  ],
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**"]
+    },
+    "dev": {
+      "dependsOn": ["^build"],
+      "cache": false,
+      "persistent": true
+    },
+    /*
+     * typecheck depends on ^build because cross-package types are read from each
+     * dependency's emitted .d.ts. lint and test are NOT turbo tasks: lint runs once
+     * over the whole repo (`eslint .`) and vitest resolves packages to source via
+     * aliases, so neither needs a build first.
+     */
+    "typecheck": {
+      "dependsOn": ["^build"]
+    },
+    "clean": {
+      "cache": false
+    }
+  }
+}

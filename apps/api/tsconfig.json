@@ -1,0 +1,18 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    /* Not "src": `include` also covers test/, and rootDir must contain every input. */
+    "rootDir": ".",
+    "types": ["node"],
+
+    /* NestJS dependency injection relies on legacy decorators + metadata emit. */
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+
+    /* Nest's own .d.ts files use class-implements patterns that need this off. */
+    "strictPropertyInitialization": false
+  },
+  /* test/ is included so the end-to-end suite is typechecked even when it cannot be run. */
+  "include": ["src/**/*", "test/**/*"]
+}

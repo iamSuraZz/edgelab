@@ -1,0 +1,21 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "types": ["node"],
+
+    /* Vite owns emit; tsc is used only as a type checker here. */
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false,
+
+    /* No baseUrl — deprecated in TS 6. `paths` resolves relative to this file. */
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": ["src", "test", "vite.config.ts", "playwright.config.ts"]
+}

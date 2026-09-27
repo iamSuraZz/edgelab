@@ -1,0 +1,1 @@
+ALTER TABLE "backtest_runs" ADD COLUMN "queue_job_id" text;

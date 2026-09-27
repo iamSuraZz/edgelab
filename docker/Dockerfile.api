@@ -1,0 +1,56 @@
+# syntax=docker/dockerfile:1.7
+#
+# NestJS API. Build context is the REPO ROOT, not this directory:
+#   docker build -f docker/Dockerfile.api -t edgelab-api .
+#
+ARG NODE_VERSION=22-alpine
+
+FROM node:${NODE_VERSION} AS base
+ENV PNPM_HOME=/pnpm
+ENV PATH="$PNPM_HOME:$PATH"
+# Pinned to the same pnpm the lockfile was written with.
+RUN corepack enable && corepack prepare pnpm@11.10.0 --activate
+WORKDIR /app
+
+# ---------------------------------------------------------------- deps
+# `pnpm fetch` populates the store from the LOCKFILE ALONE, so this expensive
+# layer is invalidated only by a dependency change, not by a source edit.
+#
+# Do NOT install here and copy source later: `COPY packages ./packages` would
+# overwrite the node_modules symlink forest pnpm creates inside each package, and
+# the build then fails with a missing local tsc.
+FROM base AS deps
+COPY pnpm-lock.yaml ./
+RUN pnpm fetch
+
+# --------------------------------------------------------------- build
+FROM deps AS build
+COPY . .
+RUN pnpm install --frozen-lockfile --offline
+# Turbo builds the API's workspace dependencies first, topologically.
+RUN pnpm exec turbo run build --filter=@edgelab/api...
+
+# ------------------------------------------------------------- runtime
+FROM base AS runtime
+ENV NODE_ENV=production
+# Non-root. Alpine's node image already has a `node` user, but an explicit
+# app-owned user makes the intent obvious and survives a base-image change.
+RUN addgroup -S edgelab && adduser -S edgelab -G edgelab
+
+# NOTE on image size: the whole /app tree is copied, dev dependencies included.
+# pnpm's node_modules is a symlink forest, so a production-only re-install or a
+# `prune` in a later stage breaks the workspace links. For a single-user
+# self-hosted deployment a larger image is a fair trade for a build that is
+# actually correct; shrinking it with `pnpm deploy` is a follow-up.
+COPY --from=build --chown=edgelab:edgelab /app /app
+
+USER edgelab
+EXPOSE 3001
+
+# Uses the real /health endpoint, which probes Postgres and Redis and returns
+# 503 when either is down — so an unhealthy dependency marks the container
+# unhealthy rather than leaving it silently broken.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD node -e "const p=process.env.API_PORT||3001;fetch('http://127.0.0.1:'+p+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+
+CMD ["node", "apps/api/dist/main.js"]

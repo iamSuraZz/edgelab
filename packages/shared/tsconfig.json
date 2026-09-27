@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src",
+    /*
+     * Node types are needed only by src/config/env.ts, which is the server-only
+     * `@edgelab/shared/config` subpath. The main barrel stays browser-safe.
+     */
+    "types": ["node"]
+  },
+  "include": ["src/**/*"]
+}

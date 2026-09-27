@@ -1,0 +1,21 @@
+{
+  "name": "@edgelab/engine",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "clean": "rimraf dist .turbo"
+  },
+  "dependencies": {
+    "@edgelab/data": "workspace:*",
+    "@edgelab/metrics": "workspace:*",
+    "@edgelab/shared": "workspace:*",
+    "pinets": "0.9.34"
+  },
+  "devDependencies": {
+    "typescript": "6.0.3"
+  }
+}

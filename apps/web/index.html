@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>EdgeLab</title>
+    <meta name="description" content="Pine Script backtesting platform" />
+    <script>
+      // Applied before first paint so a light-theme user never sees a dark flash.
+      try {
+        const stored = localStorage.getItem('edgelab-theme');
+        const theme = stored ? JSON.parse(stored).state.theme : 'dark';
+        document.documentElement.classList.toggle('dark', theme !== 'light');
+      } catch {
+        document.documentElement.classList.add('dark');
+      }
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

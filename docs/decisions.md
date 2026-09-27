@@ -1,0 +1,591 @@
+# Decisions
+
+Amendments to the phase specs in `docs/spec/`. The specs stay as written; this file
+overrides them where they disagree. Newest last.
+
+Mid-slice decisions taken without asking are recorded here too, per the working agreement in
+PROJECT.md.
+
+---
+
+## 2026-09-27 — session decisions 1–8
+
+**D1 · PineTS stays at exactly 0.9.34.** `compile()` additionally emits a **warning** when
+block indentation is not a multiple of 4 (TradingView rejects such scripts even though 0.9.34
+accepts them) and an **error** when `strategy.*` appears together with
+`request.security_lower_tf` (the truncated-body path runs on a secondary instance and bypasses
+our instrumentation, so order logging and the warmup gate would silently not apply).
+_Amends spec 03._
+
+**D2 · Bar alignment follows Exness MT5 (GMT+0 servers).** D1 starts 00:00 UTC; the NY-close
+offset stays available via `dayStartOffsetMinutes`. **W1 starts Sunday 00:00 UTC for all
+symbols**, changing the resampler default from Monday; Monday remains selectable via
+`weekStartDay`. _Amends spec 02._
+
+**D3 · Sessions are defined in `America/New_York` via the tz database, never as fixed UTC
+hours.** FX opens Sunday 17:00 and closes Friday 17:00 New York time, so the UTC boundary
+moves with US daylight saving automatically. This replaces the empirically-derived fixed
+22:00 UTC boundary. Metals, indices and energies get their weekly open/close and daily breaks
+derived from the data the same way and stored in the same structure. _Amends spec 02._
+
+**D4 · Filler bars are dropped everywhere, not just on Sundays.** MetaTrader only forms a bar
+when ticks arrive, so a flat bar with zero volume is synthetic.
+
+Verified against the stored January 2024 EURUSD data before adopting the rule:
+
+| bar shape           | count  | volume = 0 | volume > 0 |
+| ------------------- | ------ | ---------- | ---------- |
+| flat (`high = low`) | 1,825  | 1,432      | 393        |
+| non-flat            | 31,295 | 0          | 31,295     |
+
+No non-flat bar has zero volume, which confirms zero-volume bars are filler. But 393 flat bars
+carry real volume — genuine minutes where price did not move — so the rule is **drop flat AND
+zero-volume**, never flat alone. Applies to holidays and mid-week gaps too, not only weekends.
+_Amends spec 02._
+
+**D5 · Financing rollover defaults to 17:00 `America/New_York`** (Exness documents 21:00 UTC
+in summer and 22:00 UTC in winter, which is the same instant expressed in fixed UTC). Triple
+charge stays configurable, default Wednesday. _Amends spec 04._
+
+**D6 · Cross-currency runs are rejected until the currency layer exists.** A run whose symbol
+quote currency differs from the account currency fails with a clear message rather than
+silently reporting P&L in the wrong currency. Equity reconstruction is built around a
+`quoteToAccount(ts)` rate function — the identity function for USD-quoted symbols — so the
+currency layer drops in later without reshaping the equity code. _Amends specs 03 and 04._
+
+**D7 · The generic CSV importer layout stands** as implemented (header detection, sniffed
+delimiter, ISO or epoch timestamps). No change.
+
+**D8 · Build order replaces the phase order.** See `docs/spec/08-roadmap.md`. Specs 02–07
+remain the detailed reference for _what_ each area must do; the roadmap governs _when_.
+
+### Mid-slice decisions
+
+**Exness MT5 parity test skipped.** `packages/data/fixtures/exness-mt5/` does not exist, so
+the M1→H1/D1/W1 parity test in step 1 could not be written. The resampler's alignment is
+instead covered by unit tests asserting the D2 boundaries directly. Drop EURUSD M1, H1, D1 and
+W1 exports for one month into that directory and the parity test becomes the real check.
+
+**The filler-bar rule lives in `normalizeBars`, not in each adapter** (step 1, D4). Every
+provider already passes through that one boundary, so "everywhere" is free and cannot be
+forgotten by a future adapter. The Dukascopy **ask** side opts out with
+`dropFillerBars: false`: a flat zero-volume ask bar is still the best ask quote for that
+minute, and dropping it would lose the spread on a real bid bar whose ask side happened to be
+quiet. The bid side is what gets stored, so filler never reaches the database.
+
+**`openMinutesBetween` is exact rather than fast** (step 1, D3). The first cut multiplied whole
+weeks by a per-week constant, which is wrong twice a year: a 168-hour UTC window spans 169
+local hours in the spring-forward week and 167 in the autumn one. It now walks whole UTC hours
+and descends to minutes only for the two or three hours a week that straddle a session edge —
+exact everywhere, and ~60× cheaper than minute-stepping. This figure feeds `completeness`,
+which exists to be trusted.
+
+**1,432 stored filler bars purged** (step 1, D4), leaving 31,688 EURUSD M1 rows of 33,120.
+`symbols.data_version` bumped to 1 so any resample cache keyed on it is invalidated. The
+measured split matched the D4 table above exactly, including the 393 flat bars with real volume
+that were correctly kept.
+
+**PineTS ignores five `strategy()` properties; `compile()` warns** (step 2). Spec 03's fifth
+hand-verified fill case expects `process_orders_on_close` to fill at the same bar's close.
+PineTS 0.9.34 accepts the property and never reads it — the fill path is unconditional, so
+market orders always fill at the next bar's open. Same for `calc_on_order_fills`,
+`calc_on_every_tick`, `backtest_fill_limits_assumption` and `close_entries_rule="ANY"`.
+
+The conservative option was taken: the test asserts the **real** behaviour and records what
+TradingView would have produced alongside it, and `compile()` emits an `ignored-strategy-prop`
+warning per property so the divergence can never be silent. A warning rather than an error,
+because the run is still meaningful — unlike D1's `security_lower_tf` case, where
+instrumentation silently stops applying. Full detail and the decompiled fill path are in
+`docs/pinets-notes.md`. _Amends spec 03._
+
+**Engine trade ids are ours, not PineTS's** (step 2). PineTS numbers `closedtrades` and
+`opentrades` independently, so a run that reverses a position returns two different trades both
+calling themselves `trade_1`. `EngineTrade.id` is now `t1`-based, assigned by us in entry order
+the way a trade list reads, and PineTS's own value is kept as `engineId` for cross-checking.
+Without this, `run_trades` in step 3 would have had colliding primary keys.
+
+**Piscina 5 has no `taskTimeout`.** The option existed in piscina 4, was removed in 5, and is
+silently ignored — which the scaffold's pool was passing, so the documented 120s timeout did not
+exist. Timeouts now come from `RunOptions.signal`, which does terminate a synchronous infinite
+loop because piscina's abort handler tears the thread down rather than politely asking it to
+stop. Memory is capped with `resourceLimits.maxOldGenerationSizeMb`; note that this governs the
+V8 heap only, so a runaway `ArrayBuffer` allocation escapes it. Verified against real thread
+deaths — throw, spin, heap exhaustion and `process.exit` — in
+`apps/worker/src/pool/isolated-pool.test.ts`.
+
+**The pool has no Pine task yet** (step 2). The isolation mechanism is built and proven, but
+the task that runs a Pine script inside it belongs to slice B, where the API actually invokes
+it. Step 4's CLI runs the engine in-process. Adding a pine task now would be a shipped surface
+with no caller.
+
+**The scaffold's `CostModel` is replaced by `CostConfig`** (step 3). The scaffold modelled a
+single fixed `spreadPoints` and simulated fill prices itself; the engine now owns fills, and
+spec 04 needs per-bar spreads, four financing modes and a rollover calendar. `CostConfig` lives
+in `packages/shared/src/costs.ts`, with `ZERO_COSTS` as the configuration the cross-check runs.
+
+**Engine qty is in UNITS, `CostedTrade.qty` is in LOTS.** PineTS multiplies price deltas by
+`syminfo.pointvalue` and treats `default_qty_value` as contracts, so `strategy.fixed, 1` on
+EURUSD is one euro, not one lot. The overlay divides by `contractSize` on the way out. A
+cost in the quote currency is `priceDelta × units × pointValue` — the same identity
+`packages/metrics/src/cost-drag.ts` inverts for break-even cost per side, so the two cannot
+disagree.
+
+**The cross-check compares the engine against a ZERO-cost overlay, not the costed one** (step 3).
+The engine's `netprofit` contains no spread or financing, so comparing it to the costed figure
+would fail every run that charged anything. Applying the overlay twice — once at the configured
+costs and once at zero — costs no extra engine run and keeps the comparison honest.
+
+**`equity_points` (a row per bar) is replaced by `run_series` (compressed blobs)**, as spec 04
+requires. A one-year M5 run is ~75,000 bars; four series of that as rows is ~300,000 rows for
+one run, and the series are only ever read whole. Encoding is columnar JSON + gzip, which
+measured 16 kB → 3.2 kB on a real 530-bar run. `peak`/`drawdown` are recomputed on decode
+rather than stored, but the SEED peak is stored: it starts at the initial capital, so a curve
+whose first bar is already underwater would otherwise decode with no drawdown.
+
+**Migrations were generated in two passes.** `drizzle-kit generate` needs a TTY to ask whether
+`runs` → `backtest_runs` is a rename, and there is none here. Removing the old tables and
+generating, then adding the new ones and generating, produces two unambiguous migrations
+(`0001` drops, `0002` creates) and a correct snapshot. Safe because none of those tables had
+ever held a row.
+
+**`pnpm backtest` defaults to 1 lot at 1:100 leverage** (step 4). Both defaults are forced by
+engine behaviour rather than preference:
+
+- At the fixtures' declared `default_qty_value=1`, a month of EURUSD trading moves the account
+  by a few cents and every KPI rounds to zero — faithful to the script, useless as a report.
+- At the engine's default 100% margin, one lot needs ~$110,000, so on a $10,000 account
+  **PineTS cancels every order silently** and the run reports zero trades with no explanation.
+  Spec 03's `margin % = 100 / leverage` fixes it. The CLI now also warns explicitly when entry
+  orders were placed but nothing filled, because that failure is otherwise unreadable.
+
+**The `--lots` override is recorded on the run row** in `backtest_runs.props`, so a run that was
+sized by the CLI rather than by its script stays reproducible.
+
+### Slice B (jobs + API)
+
+**The backtest runs in a piscina thread with its OWN DB pool** (spec 03), not with bars passed
+in from the main thread. A one-year M5 run needs ~370,000 M1 bars; structured-cloning those into
+the thread on every job costs ~30 MB of copying for data the thread can read itself. Piscina
+loads the task module once per thread, so a module-level pool is naturally thread-local.
+
+**Progress leaves the thread over a transferred `MessagePort`.** There is no other channel: a
+worker thread cannot reach `job.updateProgress()`, and piscina does not expose its own message
+plumbing. The port must be TRANSFERRED, not cloned — a cloned port arrives detached and silently
+drops every message, which would look exactly like a job that reports no progress.
+
+**Errors crossing back out of a thread keep `message`, `stack` and `cause` — NOT `name`.**
+Structured clone drops own properties, so the first cut — `Object.assign(new Error(msg), {detail})`
+— arrived with `detail` undefined.
+
+_Corrected during the verification sprint._ The second cut put the classification in `Error.name`
+(`NoDataError`, …), and that was **wrong**: structured clone normalises an Error's name to one of
+the seven built-ins, so `NoDataError` arrives as plain `"Error"`. The mistake survived review
+because a built-in subclass like `TypeError` DOES round-trip, so any check using one suggests
+`name` is safe. The consequence in production was that "No EURUSD data in that range" reached the
+user coded as `task-script-error` — "your script has a bug" — and only running `pnpm test:e2e`
+against a real stack exposed it.
+
+Classification now travels in **`cause`**, as `{ edgelabCode }`. `cause` survives, and survives as
+an arbitrary cloneable value. The job layer walks the cause chain because the pool wraps whatever
+a task throws in `TaskScriptError`, putting a tagged error one hop deeper.
+`apps/worker/src/pool/structured-clone.test.ts` pins all of this against the platform.
+
+**Cancellation is out of band.** BullMQ has no cancel: `job.remove()` only works while a job is
+still waiting, and once a processor is running nothing in the queue can reach it. So the API
+publishes on a per-job Redis channel and the worker — the only process holding the
+AbortController — aborts the piscina task, which terminates the thread. A job still waiting is
+removed from the queue instead. `DELETE /backtests/:id/job` picks the path from the job's state.
+
+**Job events are PUBLISHED and also SET with a TTL.** Pub/sub has no history, so a client that
+subscribes after a fast job finished would wait forever for an event that already happened. The
+SSE endpoint replays the stored last-known state, then switches to live events, then re-checks
+after subscribing to close the gap in between.
+
+**SSE is written against the raw `Response`, not Nest's `@Sse()`.** The decorator wraps an
+Observable and offers no clean way to replay state before live events or to end the stream on a
+terminal one — both of which this endpoint needs.
+
+**The API does not depend on `@edgelab/worker` in production.** Queue names are duplicated as
+literals in `apps/api/src/infra/queues.module.ts` rather than imported, so deploying the API does
+not drag piscina, pinets and the provider SDKs into its image. The worker IS a devDependency,
+for the end-to-end test only.
+
+**Import runs inline; ingest is queued.** An uploaded file lives in the API process's memory, so
+handing it to the worker would mean shipping the bytes through Redis or a shared volume. Ingest
+has no such problem and belongs on the queue. Ingest is also NOT run in the piscina pool, unlike
+the backtest: it is network-bound, and the thing a thread protects against — user code wedging or
+exhausting memory — has no analogue when the code is ours.
+
+**Series are downsampled by min/max bucketing, not by striding.** A stride can walk straight past
+the spike that IS the drawdown, so the chart would show a shallower history than actually
+happened. Each bucket keeps its extremes, so every peak and trough survives at full amplitude.
+`?points` is therefore a target, not a cap — up to two points per bucket.
+
+**The end-to-end test boots the API and the workers in-process** against the dockerised DB and
+Redis, on port 0. Chosen over requiring `pnpm dev` (fragile ordering, confusing failures when a
+process is mid-restart) and over the prod compose stack (which publishes no ports by design, per
+spec 07, so reaching it would need an override file). It lives behind `pnpm test:e2e` rather than
+in `pnpm test`, so a fresh clone without Docker still gets 519 green unit tests.
+
+**BLOCKED: slice B's DONE WHEN is unverified.** Docker Desktop's WSL2 backend will not start on
+this machine — `wsl -d docker-desktop` reports `HCS_E_HYPERV_NOT_INSTALLED`, and
+`HypervisorPresent` is False while `VirtualizationFirmwareEnabled` is True. Firmware VT-x is on;
+Windows is not launching the hypervisor, and no `hypervisorlaunchtype` is set in the BCD. Fixing
+it needs an elevated boot-config change plus a reboot, which is not mine to make. Consequences:
+
+- `pnpm test:e2e` has never been executed. It typechecks and lints, nothing more.
+- Migration `0003_foamy_human_torch.sql` (`backtest_runs.queue_job_id`) is GENERATED but NOT
+  APPLIED. Run `pnpm db:migrate` before the first API-driven run, or every insert into
+  `backtest_runs` will fail on the missing column.
+
+### Slice C (Studio UI)
+
+**The symbol list shows only instruments with stored bars, and the date range is clamped to the
+selected symbol's coverage.** Offering a symbol or a window that cannot run just moves the failure
+from a disabled control to a red banner two minutes later. The picker shows each symbol's coverage
+inline for the same reason — "which symbols can I actually use" is the first question the panel
+has to answer.
+
+**Series are downsampled for transport, and the UI trusts that.** `GET /backtests/:id/series`
+returns min/max-bucketed points by default; the Overview chart renders them as-is rather than
+re-fetching `?full=1`, because the bucketing preserves every peak and trough at full amplitude.
+
+**Equity and drawdown are two synchronised charts, not one with two scales.** A drawdown is always
+at or below zero and an equity curve is a large positive number; sharing an axis squashes the
+drawdown into the baseline, which is the one thing it exists to show.
+
+**Monaco gets a Monarch tokenizer, not a Pine parser.** Colouring and bracket matching are all the
+editor needs; the real parse is `POST /pine/compile`, whose diagnostics become the inline markers.
+Reimplementing Pine's semantics client-side would duplicate PineTS badly and drift from it.
+Completions are a curated ~45 built-ins with signatures rather than a dump of all ~1,500 — a popup
+that lists everything is one you stop reading.
+
+**The editor emits 4 spaces and never a tab** (`tabSize: 4`, `insertSpaces`, `detectIndentation:
+false`), because D1 records that TradingView rejects indentation that is not a multiple of 4 even
+though PineTS 0.9.34 accepts it. The compile warning catches pasted code; this stops the editor
+from creating the problem in the first place.
+
+**The run's `props` are left empty and sizing is expressed as lots + leverage.** The API derives
+`default_qty_value`, `margin_long` and `margin_short` from them (spec 03's margin % = 100 /
+leverage), so the browser never has to know the symbol's contract size or replicate that formula.
+
+**A failed compile is not an HTTP error and is not rendered as one.** The editor calls
+`/pine/compile` on every debounced keystroke; treating a mid-word script as a failure would make
+normal typing look broken. Diagnostics are the payload. A failed compile REQUEST — the API being
+down — is reported separately, so "cannot reach the API" never appears as a syntax error on line 1.
+
+**API error messages are shown verbatim.** "No EURUSD data in 2030-01-01 .. 2030-02-01. Stored
+coverage is 2024-01-01 .. 2024-01-31." is the whole point of the slice-B error envelope, and any
+paraphrase in the client throws it away exactly when it is most useful.
+
+**Two smoke suites, split by what they need.** `studio.smoke.ts` is the slice-C acceptance test and
+needs the full stack; `shell.smoke.ts` needs only the dev server and covers the empty and error
+states — the states a new user sees first and the easiest to leave broken. The split means a
+machine without Docker can still catch a crash on mount or a broken import.
+
+**BLOCKED: slice C's DONE WHEN is unverified, for the same reason as slice B.** Docker/WSL2 still
+will not start (`HypervisorPresent: False`), so:
+
+- `studio.smoke.ts` has never been run — it needs the API, the worker, Postgres and Redis.
+- "the KPIs on screen match the API" is unverified; the assertion is written and typechecked.
+- `shell.smoke.ts` WAS run in a real browser and **all 8 pass**. Getting there found three
+  defects, none of which typecheck, lint or 519 unit tests could see:
+
+  1. **The app did not mount at all** — a blank white page. `@edgelab/shared` emits CommonJS, and
+     Vite discovers a CJS module's named exports with cjs-module-lexer, which cannot see through
+     `export * from './costs'`. `import { DEFAULT_COSTS }` therefore threw at runtime. Fixed by
+     aliasing workspace packages to their TypeScript source in `vite.config.ts`, as
+     `vitest.config.mts` already did — which is exactly why the unit tests never caught it.
+  2. **The editor took the page down.** In a Monarch tokenizer `@version` is an ATTRIBUTE
+     REFERENCE, not a literal `@`, so the rule threw "language definition does not contain
+     attribute 'version'". Fixed with a `[@]` character class, which breaks the
+     `@`-followed-by-word-character pattern Monarch substitutes on.
+
+  3. **The resize test wiped the state it was asserting on.** `addInitScript` re-runs on every
+     document, including `page.reload()`, so clearing localStorage there destroyed the stored
+     pane ratio before the app booted — and the app correctly came back at its default. The
+     app was right; the test was wrong. The clear is now guarded by a sessionStorage sentinel,
+     which survives a reload but not a new browser context.
+
+  The first two would have shipped. The third would have read as a product bug forever.
+
+**Monaco loads from a CDN** (`cdn.jsdelivr.net`), which is `@monaco-editor/react`'s default
+loader. For a self-hosted personal tool that is a real limitation — offline, the editor never
+appears. Bundling Monaco locally is deferred to slice F's polish pass, and noted here so it is a
+decision rather than an oversight.
+
+## 2026-09-27 — slice D amendments (Integrity & Overfitting)
+
+These amend spec 06 and were given with the slice. Recorded here because `docs/decisions.md`
+overrides the specs where they disagree.
+
+**A1 · Look-ahead keeps three layers** — static lint → causality check → prefix-invariance with a
+one-HTF-bucket margin — with two changes.
+
+**A1a · Causality prefers interception over re-derivation.** Log which HTF bucket each
+`request.security` call actually used, by intercepting it the way `strategy.*` is intercepted.
+Judge each bar at its CLOSE time, because `lookahead_off` legitimately returns a bucket's value on
+the chart bar where that bucket closes. Ties count as causal; report **inconclusive** when most
+bars are ambiguous (booleans, flat series). A `lookahead_off` script joins the clean fixtures.
+
+**A1b · Add a future-splice test**, as a `DbProvider` option. Keep every bar and timestamp, but
+replace the M1 data after each cutoff with a different real segment, rescaled to start at the
+cutoff price. Orders placed and trades closed before the cutoff must be identical to the original
+run. Nothing is truncated, so no margin is needed, and it catches intra-bucket leaks from any
+source. Truncation-with-margin stays, for length-dependent leaks (`last_bar_index`,
+`barstate.islast`).
+
+**A2 · Sample-size guard reports `n/a` with a reason** when a segment is structurally too short.
+The overall verdict becomes **Inconclusive**, never Pass, whenever a critical check is `n/a`. The
+walk-forward form estimates OOS trades per fold from the full-sample trade rate and warns before
+starting.
+
+**A3 · Walk-forward cost is measured, not assumed.** Time transpile versus run first; if
+`runPretranspiled` accepts an inputs map, transpile once per worker thread. Base the ETA on that
+measurement.
+
+**A4 · Spread stress, costed OOS metrics and the sealed holdout are unblocked**, since phase 4
+exists.
+
+### What the interception probe established
+
+`request.security` **is** interceptable, the same way `strategy.*` is: `ctx.pine.request` holds
+`security` as an own, writable property, and a patch assigned there is called once per chart bar
+(234 calls over a 234-bar run). That much of A1a works.
+
+But interception alone does **not** reveal the bucket:
+
+- `request.security` returns a **Promise**, resolving to a plain number — the HTF value at that
+  chart bar, with no bucket identity attached.
+- `request._cache` has no enumerable own keys at call time or after resolution.
+- `request.context` is the **CHART** context, not the secondary one: it reports
+  `isSecondaryContext: false`, and its `idx` and `data.openTime` track the chart bar exactly
+  (chartIdx 57 → secIdx 57, both 2024-01-02T22:30 on an M15 run). It is the parent, not the HTF
+  context.
+
+So the design is the hybrid A1a describes, and the fallback is taken **on evidence**: interception
+supplies the exact per-bar returned value — better than re-deriving it, which could drift from
+what the script actually saw — and bucket attribution is then value matching against our own HTF
+series, with ties causal and an explicit `inconclusive` when most bars are ambiguous.
+
+If a future pinets exposes the secondary context, the value-matching step can be replaced without
+touching the rest of the check.
+
+## 2026-09-27 — slice E (data & results)
+
+**Only the currency layer's arithmetic was built.** The rest of slice E is blocked; see below.
+
+**D6 is superseded, but not yet removed.** `packages/engine/src/conversion.ts` implements spec 03's
+currency layer: pick the conversion pair, get its DIRECTION right, look the rate up bar by bar, and
+name the download when the pair's bars are missing. D6's blanket refusal of non-USD quote
+currencies stays in `costs.ts` until the layer is wired into `orchestrateRun` — removing the guard
+before the replacement is connected would let a cross-currency run through with no conversion at
+all, which is the exact failure D6 exists to prevent.
+
+**Direction is the whole problem.** A pair BBBQQQ quotes "QQQ per one BBB", which reads backwards
+relative to the conversion it performs. JPY→USD needs `1 / USDJPY`; GBP→USD needs `GBPUSD`
+unchanged. Inverting USDJPY the wrong way is wrong by a factor of ~151² — 7,550,000 instead of
+331.13 — which still looks like money, so it gets its own test.
+
+**The rate is the last one AT OR BEFORE the instant**, never a later one. Using a later bar's rate
+would be look-ahead committed in the reporting layer, the same class of error slice D exists to
+catch.
+
+**The pre-series fallback is the FIRST known rate, not 1.** Falling back to 1 would silently report
+unconverted yen as dollars.
+
+### Slice E blockers
+
+- **Item 2 cannot be done at all.** Twelve Data and Binance need Docker to store what they fetch
+  (the key IS configured, 97 chars). The Exness importer was to be fixed against
+  `packages/data/fixtures/exness-ticks/sample.csv` — **that file does not exist, and neither does
+  `packages/data/fixtures/`**. The Exness column layout therefore remains the open question it has
+  been since phase 02.
+- **Items 1 and 4** (Data page, dashboard completion) are buildable and browser-verifiable against
+  a stubbed API, but were not reached.
+- **DONE WHEN #1** needs a real USDJPY run, so it needs Docker plus USDJPY bars. What exists is the
+  hand check of the arithmetic it rests on, as a test.
+
+## Verification sprint (2026-09-27)
+
+Everything below was found by running code that had only ever been typechecked. The theme is
+uncomfortable and worth stating plainly: **every single "code complete, DONE WHEN unverified"
+claim in slices B–F was wrong in at least one way that made the feature unusable.** Eight real
+defects, in code that compiled, linted and passed 616 unit tests.
+
+### A5 — same-bar execution is ESTIMATED, not re-run
+
+Spec 06 asked for the same-bar check to be a re-run with `process_orders_on_close` flipped, diffed
+against the original. **That is impossible**: the engine ignores that flag and its siblings, so
+both runs would be byte-identical and the check would report a reassuring zero forever. A check
+that cannot fail is worse than no check.
+
+Replaced with a warning plus an analytical estimate, `packages/validation/src/same-bar.ts`. For
+each market fill it prices the gap between where we fill (the next bar's open) and where
+TradingView would fill with the flag on (the signal bar's close), times size, in account currency,
+signed so **positive means our fill was worse**.
+
+It is a lower bound and says so in every result: it holds the strategy's decisions fixed, whereas a
+real same-bar run could decide differently once its equity diverges. The value is the order of
+magnitude — "this result depends on two ticks per trade" is a different conclusion from "this is
+robust to it". Fills on bar 0 are reported `unassessable` rather than scored zero, so they cannot
+dilute the mean.
+
+### Why the PF 0.09 results were not a bug
+
+Three fixtures appearing to report _exactly_ 0.09 was the strongest signal that something was
+shared and wrong. They do not. Hand-computed from the stored trades:
+
+| fixture            | gross win | gross loss | PF     | shown |
+| ------------------ | --------- | ---------- | ------ | ----- |
+| ema-cross          | 548.00    | 6255.00    | 0.0876 | 0.09  |
+| bollinger-breakout | 450.00    | 4995.00    | 0.0901 | 0.09  |
+| supertrend-atr     | 450.00    | 5133.00    | 0.0877 | 0.09  |
+| rsi-mean-reversion | 1728.00   | 864.00     | 2.0000 | 2.00  |
+
+Three different numbers that render the same at two decimal places. The metric is correct.
+
+What was checked before concluding that:
+
+- **Sign convention**, from first principles (`sign-convention.test.ts`). A long held through a
+  rising market earns `(exit − entry) × qty`; its short twin loses exactly the mirror image. The
+  zero-cost cross-check _cannot_ catch a sign error — it only proves our reconstruction agrees with
+  the engine, so a side flipped in both agrees perfectly and is wrong twice.
+- **Signal direction.** `ta.crossover(fast, slow)` → long, verified against the plotted EMA values
+  at the entry bar on a V-shaped series.
+- **Fills against stored M1.** Trade 15 entered at 1.08939, which is exactly H1 bar 291's open,
+  resampled from 60 complete M1 bars. No spike, no bad bar, no bid/ask join error.
+- **Arithmetic.** −0.00416 × 100,000 = −416.00 gross, to the cent.
+- **A longer window.** The same fixture over six months of 2022 gives PF 0.74 at a 26.9% win rate
+  over 119 trades — an ordinary losing trend-follower. January 2024 was 29 trades in a choppy
+  month; 1 winner in 29 is unlikely, not impossible.
+
+The residual explanation is the strategies themselves: ema-cross, bollinger-breakout and
+supertrend-atr are all always-in-market reversal systems with no protective exit, which is what
+gets whipsawed. The two fixtures with a real `strategy.exit` (rsi-mean-reversion, donchian) behave
+completely differently on the same data. The −57% return is a SIZING artifact of `--lots 1` on a
+$10,000 account — one standard lot is ~$108,000 of notional, so 22 pips is 2.2% of equity.
+
+### Provider spread coverage
+
+Dukascopy supplies a per-bar spread (113 distinct values over January 2024 EURUSD, mean 3.5
+points). **Binance and Twelve Data supply none** — bars from those adapters come back with
+`spread: null`, so runs on them fall back to `symbol.defaultSpreadPoints`. That is the fallback
+working as intended, but it means a cost comparison across providers is not like for like.
+
+## Slice D step 1 (2026-09-28)
+
+**A1 has a measured blind spot, and A1b is the fix rather than a nice-to-have.**
+
+Prefix invariance does NOT catch the leaky fixture. Observed, not theorised: `lookahead-leak`
+passes 6 of 6 truncation cutoffs while the static lint fails it at line 8.
+
+The reason is structural. Truncation only removes data at the END, so a leak with a BOUNDED
+horizon — `request.security` with `lookahead_on` sees at most to the end of the current HTF bucket
+— only perturbs decisions inside that bucket of the cutoff. That is exactly the region the A1
+margin must exclude, because without the margin every honest HTF strategy fails: its last bucket
+before the cutoff genuinely differs. Margin big enough to avoid false positives ⇒ margin big enough
+to hide a bounded leak. The two requirements are in direct conflict.
+
+So truncation-based prefix invariance catches **unbounded** leaks (`last_bar_index`,
+`barstate.islast`, anything normalised over the whole series) and nothing else. That is still worth
+having, and the check now says so in its passing message instead of implying it proved causality.
+
+**A1b — splice different future data rather than truncating — is what closes this.** Nothing is
+removed, so no margin is needed, and an intra-bucket leak diverges on the first affected bar. It is
+the first thing step 2 should build, ahead of the endpoint.
+
+**Verdict severities.** The static lint is `critical`: an error there is a specific named leak at a
+known line. A clean lint is never reported as more than "nothing obvious in the source" — it has
+read the text, not the behaviour, and overclaiming there is the most dangerous thing this feature
+could do.
+
+**Validation fixtures live in `packages/validation`, not `packages/engine`.** Engine and validation
+are siblings in the dependency order, so validation cannot import the engine's fixture list; the
+first version of the lint test only worked because the test runner aliases packages to source. An
+app wires the two together. They are also kept out of the Studio dropdown — a script whose only
+purpose is to cheat is not an example to offer anyone.
+
+**`dataCutoffTs` is a per-RUN parameter, not an engine option.** Prefix invariance varies it per
+truncated run, and the alternative was constructing a new engine per cutoff.
+
+## Slice D continuation — prerequisites (2026-09-28)
+
+### A6 · One series, one feed
+
+**Measured first:** the EURUSD series was already contaminated. 216,810 dukascopy bars
+(2022-01-02 .. 2024-01-31) and 6,238 twelvedata bars (2024-02-01 .. 07) in the same
+`symbol_id`, from the adapter exercise during the verification sprint.
+
+Why that matters more than it looks: providers disagree about what a minute IS. Dukascopy stores
+bid with a measured spread; Twelve Data supplies neither a spread nor volume, and its bars come
+from a different consolidation of a different set of venues. Resampling across the join produces
+H1 bars whose open comes from one vendor's convention and whose close comes from another's, and a
+backtest over that boundary is measuring the vendor change as if it were the market.
+
+Three rules follow:
+
+1. **A run whose range spans more than one source is refused**, naming both sources and the
+   boundary. Refusing is right rather than warning: the result would be arithmetically fine and
+   semantically meaningless, which is the worst kind of wrong.
+2. **A different feed is a different dataset.** `EURUSD.exness` is its own symbol row sharing
+   EURUSD's instrument metadata (digits, mintick, contract size), never rows appended to `EURUSD`.
+   Comparing two feeds is then an explicit act — two runs, two symbols — instead of an accident.
+3. **The stray Twelve Data week moves out** to its own dataset rather than being deleted: it is
+   real data that cost an API call, and it is the fixture that proves rule 1 fires.
+
+### A7 · Backfill is paced, not backed off
+
+Dukascopy answered HTTP 429 through all six backoff attempts up to 160s on three separate
+sessions, so the two-year backfill never progressed past 2022-06. Backoff is the wrong instrument:
+it reacts after the limit is already hit, and by then the connection is being throttled.
+
+The ingest job now paces requests below the limit by construction, stops cleanly on a persistent
+429 rather than exhausting retries, records how far it reached, and resumes the next night. The
+resumability that makes this safe already exists and was verified on real data — the cursor
+advances to the end of the contiguous run covering the requested start.
+
+### A8 · The boot test exists because the API once could not start
+
+Seven constructors took a class-typed dependency with no `@Inject` and one module never imported
+its dependency's module, and the whole API aborted on startup — undetected because nothing in
+`pnpm test` ever built the Nest graph. `pnpm typecheck` cannot catch it: the types are correct, it
+is the runtime metadata that is absent.
+
+The test compiles the FULL module graph under the same esbuild transform dev uses, with no
+decorator metadata, and with the connection-opening providers stubbed. It must fail exactly as dev
+fails. A test that enabled `emitDecoratorMetadata` would pass on the broken code and be worse than
+no test.
+
+**CI: not added.** The instruction was conditional on a git remote and `git remote -v` is empty, so
+a workflow file would be dead configuration. The five commands it should run are lint, typecheck,
+test, test:e2e and test:smoke against TimescaleDB and Redis service containers.
+
+### A6 addendum · where the feed guard runs, and where it must not
+
+The guard lives on the **main thread**, in the BullMQ job, not inside the piscina task.
+
+It was in the task first, and it broke the no-data e2e test: that test started reporting
+`task-timeout` instead of `no-data`. Confirmed by removing only that one call — 25/25 with it gone,
+24/25 with it present. A worker thread resolves its own module graph outside vitest's aliases, and
+the extra import stalled the thread past its 120s limit. Nothing about the check needs a thread —
+it is one indexed query, measured at 0.11 ms — and running it outside also keeps the refusal off
+the structured-clone path entirely.
+
+Worth remembering as a general rule: an import added to a piscina task is not free, and its cost
+does not show up anywhere near the change.
+
+### A7 addendum · the 429 is not about our pacing
+
+Measured after building the paced job: Dukascopy refuses the **first** request of a session, before
+any pacing could apply. So the block is longer-lived than one run — IP-level, hours or days — and
+no in-run spacing can avoid it. Pacing is still right (it stops us provoking a fresh block), but the
+thing that actually recovers the backfill is the nightly retry.
+
+This is why `rate-limited` had to be a distinct terminal state exiting zero. The correct response to
+"not tonight" is to come back tomorrow, and a job that reported failure for that would be muted
+within a week. Recorded in `ingest_jobs`, which had existed since migration 0000 with nothing
+reading or writing it.
+
+**Still pending, and now the honest blocker for slice D's two-year gate:** the backfill cannot get
+past 2022-07 while the block holds. The six contiguous months of 2022 are the acceptance data.

@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  /**
+   * `rootDir: "src"` here, not the "." the typecheck config uses: the typecheck pass also reads
+   * test/, so its rootDir has to be the package root, while the BUILD must emit dist/main.js
+   * rather than dist/src/main.js — which is what package.json's "exports" points at.
+   */
+  "compilerOptions": { "rootDir": "src" },
+  "include": ["src/**/*"],
+  "exclude": ["src/**/*.test.ts", "src/**/*.spec.ts", "test", "dist", "node_modules"]
+}

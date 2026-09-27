@@ -1,0 +1,42 @@
+# syntax=docker/dockerfile:1.7
+#
+# Static Vite build served by nginx. Build context is the REPO ROOT:
+#   docker build -f docker/Dockerfile.web -t edgelab-web .
+#
+ARG NODE_VERSION=22-alpine
+
+FROM node:${NODE_VERSION} AS base
+ENV PNPM_HOME=/pnpm
+ENV PATH="$PNPM_HOME:$PATH"
+RUN corepack enable && corepack prepare pnpm@11.10.0 --activate
+WORKDIR /app
+
+# `pnpm fetch` populates the store from the LOCKFILE ALONE, so this expensive
+# layer is invalidated only by a dependency change, not by a source edit. The
+# install afterwards is offline and fast.
+#
+# Do NOT install here and copy source later: `COPY packages ./packages` would
+# overwrite the node_modules symlink forest pnpm creates inside each package, and
+# the build then fails with a missing local tsc.
+FROM base AS deps
+COPY pnpm-lock.yaml ./
+RUN pnpm fetch
+
+FROM deps AS build
+COPY . .
+RUN pnpm install --frozen-lockfile --offline
+RUN pnpm exec turbo run build --filter=@edgelab/web...
+
+# ------------------------------------------------------------- runtime
+# nginx-unprivileged runs as uid 101 with no root at any point and listens on
+# 8080, which is what lets this satisfy "non-root" without patching a stock
+# nginx image's pid/cache paths.
+FROM nginxinc/nginx-unprivileged:1.27-alpine AS runtime
+
+COPY --chown=nginx:nginx docker/nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=build --chown=nginx:nginx /app/apps/web/dist /usr/share/nginx/html
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD wget -qO- http://127.0.0.1:8080/healthz || exit 1

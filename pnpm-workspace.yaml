@@ -1,0 +1,18 @@
+packages:
+  - 'apps/*'
+  - 'packages/*'
+
+# pnpm 11 requires explicitly approving packages that run install scripts.
+# Declaring them here keeps `pnpm i` non-interactive and reproducible.
+allowBuilds:
+  '@tailwindcss/oxide': true
+  esbuild: true
+  # bullmq -> msgpackr's optional native accelerator. The pure-JS fallback is
+  # functionally identical, so skip the native build.
+  msgpackr-extract: false
+  turbo: true
+  unrs-resolver: true
+
+minimumReleaseAgeExclude:
+  - '@tanstack/query-core@5.104.0'
+  - '@tanstack/react-query@5.104.0'

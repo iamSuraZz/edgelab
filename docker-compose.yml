@@ -1,0 +1,48 @@
+# Local development infrastructure for EdgeLab.
+#   docker compose up -d
+# Credentials here are local-only and intentionally match .env.example.
+
+services:
+  db:
+    image: timescale/timescaledb:2.17.2-pg17
+    container_name: edgelab-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: edgelab
+      POSTGRES_PASSWORD: edgelab
+      POSTGRES_DB: edgelab
+      # M1 bars are append-heavy; give the planner a sane default.
+      TIMESCALEDB_TELEMETRY: 'off'
+    ports:
+      - '5432:5432'
+    volumes:
+      - edgelab-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U edgelab -d edgelab']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  redis:
+    image: redis:7-alpine
+    container_name: edgelab-redis
+    restart: unless-stopped
+    # BullMQ requires keyspace notifications for delayed/stalled job handling.
+    command: ['redis-server', '--appendonly', 'yes', '--notify-keyspace-events', 'Ex']
+    ports:
+      - '6379:6379'
+    volumes:
+      - edgelab-redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+volumes:
+  edgelab-db-data:
+    name: edgelab-db-data
+  edgelab-redis-data:
+    name: edgelab-redis-data

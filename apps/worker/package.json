@@ -1,0 +1,46 @@
+{
+  "name": "@edgelab/worker",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./dist/main.js",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/main.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "clean": "rimraf dist .turbo",
+    "ingest": "tsx src/cli/ingest-cli.ts",
+    "verify": "tsx src/cli/verify-cli.ts",
+    "import": "tsx src/cli/import-cli.ts",
+    "backtest": "tsx src/cli/backtest-cli.ts",
+    "validate": "tsx src/cli/validate-cli.ts",
+    "data:split-feed": "tsx src/cli/split-feed-cli.ts",
+    "backfill": "tsx src/cli/backfill-cli.ts"
+  },
+  "dependencies": {
+    "@edgelab/data": "workspace:*",
+    "@edgelab/db": "workspace:*",
+    "@edgelab/engine": "workspace:*",
+    "@edgelab/metrics": "workspace:*",
+    "@edgelab/shared": "workspace:*",
+    "@edgelab/validation": "workspace:*",
+    "bullmq": "6.3.9",
+    "ioredis": "6.0.0",
+    "piscina": "5.3.2"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.3",
+    "tsx": "4.23.15",
+    "typescript": "6.0.3"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/main.d.ts",
+      "default": "./dist/main.js"
+    },
+    "./boot": {
+      "types": "./dist/boot.d.ts",
+      "default": "./dist/boot.js"
+    }
+  }
+}

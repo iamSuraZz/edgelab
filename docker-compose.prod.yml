@@ -1,0 +1,170 @@
+# Production stack for a Coolify host with Traefik in front.
+#
+#   docker compose -f docker-compose.prod.yml build
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# NOTHING publishes a port. Traefik reaches `web` over the shared proxy network;
+# Postgres, Redis, the API and the worker are only reachable on the internal
+# network. Set EDGELAB_DOMAIN and the secrets in a .env beside this file.
+
+services:
+  db:
+    image: timescale/timescaledb:2.17.2-pg17
+    container_name: edgelab-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-edgelab}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-edgelab}
+      TIMESCALEDB_TELEMETRY: 'off'
+    volumes:
+      - edgelab-db-data:/var/lib/postgresql/data
+    networks:
+      - internal
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-edgelab} -d ${POSTGRES_DB:-edgelab}']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    container_name: edgelab-redis
+    restart: unless-stopped
+    # BullMQ needs keyspace notifications for delayed/stalled job handling.
+    command: ['redis-server', '--appendonly', 'yes', '--notify-keyspace-events', 'Ex']
+    volumes:
+      - edgelab-redis-data:/data
+    networks:
+      - internal
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    container_name: edgelab-api
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      API_PORT: 3001
+      DATABASE_URL: postgresql://${POSTGRES_USER:-edgelab}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-edgelab}
+      REDIS_URL: redis://redis:6379
+      TWELVEDATA_API_KEY: ${TWELVEDATA_API_KEY:-}
+      ACCOUNT_CURRENCY: ${ACCOUNT_CURRENCY:-USD}
+      WEB_PORT: 8080
+      DATA_CACHE_DIR: /data/cache
+    volumes:
+      - edgelab-data-cache:/data/cache
+    networks:
+      - internal
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.worker
+    container_name: edgelab-worker
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER:-edgelab}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-edgelab}
+      REDIS_URL: redis://redis:6379
+      TWELVEDATA_API_KEY: ${TWELVEDATA_API_KEY:-}
+      ACCOUNT_CURRENCY: ${ACCOUNT_CURRENCY:-USD}
+      API_PORT: 3001
+      WEB_PORT: 8080
+      DATA_CACHE_DIR: /data/cache
+    volumes:
+      # Shared with the API so a download started by one is visible to the other.
+      - edgelab-data-cache:/data/cache
+    networks:
+      - internal
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.web
+    container_name: edgelab-web
+    restart: unless-stopped
+    networks:
+      - internal
+      - proxy
+    depends_on:
+      - api
+    labels:
+      - 'traefik.enable=true'
+      - 'traefik.docker.network=${TRAEFIK_NETWORK:-proxy}'
+
+      # Router
+      - 'traefik.http.routers.edgelab.rule=Host(`${EDGELAB_DOMAIN:?set EDGELAB_DOMAIN in .env}`)'
+      - 'traefik.http.routers.edgelab.entrypoints=websecure'
+      - 'traefik.http.routers.edgelab.tls=true'
+      - 'traefik.http.routers.edgelab.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}'
+      - 'traefik.http.services.edgelab.loadbalancer.server.port=8080'
+
+      # Single-user app: basic auth over the whole thing. EDGELAB_BASIC_AUTH is an
+      # htpasswd line; see the README for how to generate it (dollar signs must be
+      # doubled in a compose file).
+      - 'traefik.http.middlewares.edgelab-auth.basicauth.users=${EDGELAB_BASIC_AUTH:?set EDGELAB_BASIC_AUTH in .env}'
+      - 'traefik.http.middlewares.edgelab-auth.basicauth.removeheader=true'
+
+      # SSE must not be buffered or compressed by the proxy.
+      - 'traefik.http.middlewares.edgelab-headers.headers.customrequestheaders.X-Forwarded-Proto=https'
+
+      - 'traefik.http.routers.edgelab.middlewares=edgelab-auth,edgelab-headers'
+
+  # Nightly pg_dump with 7-day retention. Plain alpine + a sleep loop rather than
+  # a cron image: one less thing to learn, and the schedule is visible here.
+  backup:
+    image: postgres:17-alpine
+    container_name: edgelab-backup
+    restart: unless-stopped
+    environment:
+      PGUSER: ${POSTGRES_USER:-edgelab}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB:-edgelab}
+      PGHOST: db
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-7}
+    volumes:
+      - edgelab-backups:/backups
+      - ./docker/backup.sh:/usr/local/bin/backup.sh:ro
+    networks:
+      - internal
+    entrypoint: ['/bin/sh', '/usr/local/bin/backup.sh']
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  edgelab-db-data:
+    name: edgelab-db-data
+  edgelab-redis-data:
+    name: edgelab-redis-data
+  edgelab-data-cache:
+    name: edgelab-data-cache
+  edgelab-backups:
+    name: edgelab-backups
+
+networks:
+  internal:
+    name: edgelab-internal
+  # Traefik's network, created outside this stack.
+  proxy:
+    name: ${TRAEFIK_NETWORK:-proxy}
+    external: true

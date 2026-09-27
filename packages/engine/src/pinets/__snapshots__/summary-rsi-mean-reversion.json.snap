@@ -1,0 +1,13 @@
+{
+  "barsProcessed": 2667,
+  "closedTrades": 52,
+  "netprofit": 0.1,
+  "openTrades": 0,
+  "orderLogSize": 2721,
+  "plots": [
+    "Overbought",
+    "Oversold",
+    "RSI",
+  ],
+  "suppressedOrders": 2,
+}

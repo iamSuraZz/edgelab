@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.turbo/
+coverage/
+.cache/
+pnpm-lock.yaml
+packages/db/drizzle/
+
+# Phase prompts are stored verbatim as the record of what was asked.
+# Reformatting them would defeat the point.
+docs/spec/

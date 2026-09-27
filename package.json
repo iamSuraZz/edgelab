@@ -1,0 +1,50 @@
+{
+  "name": "edgelab",
+  "version": "0.1.0",
+  "private": true,
+  "description": "EdgeLab \u2014 Pine Script backtesting platform",
+  "packageManager": "pnpm@11.10.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "turbo run dev --parallel",
+    "build": "turbo run build",
+    "lint": "eslint . --max-warnings 0",
+    "typecheck": "turbo run typecheck",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "db:generate": "pnpm --filter @edgelab/db run generate",
+    "db:migrate": "pnpm --filter @edgelab/db run migrate",
+    "db:studio": "pnpm --filter @edgelab/db run studio",
+    "clean": "turbo run clean && rimraf node_modules",
+    "ingest": "turbo run build --filter=@edgelab/db --filter=@edgelab/data && pnpm --filter @edgelab/worker run ingest",
+    "verify": "turbo run build --filter=@edgelab/db --filter=@edgelab/data && pnpm --filter @edgelab/worker run verify",
+    "import:file": "turbo run build --filter=@edgelab/db --filter=@edgelab/data && pnpm --filter @edgelab/worker run import",
+    "backtest": "turbo run build --filter=@edgelab/db --filter=@edgelab/data --filter=@edgelab/metrics --filter=@edgelab/engine && pnpm --filter @edgelab/worker run backtest",
+    "test:e2e": "vitest run --config vitest.e2e.config.mts",
+    "test:smoke": "pnpm --filter @edgelab/web test:smoke",
+    "validate": "turbo run build --filter=@edgelab/db --filter=@edgelab/data --filter=@edgelab/metrics --filter=@edgelab/engine --filter=@edgelab/validation && pnpm --filter @edgelab/worker run validate",
+    "data:split-feed": "pnpm --filter @edgelab/worker run data:split-feed",
+    "backfill": "turbo run build --filter=@edgelab/db --filter=@edgelab/data && pnpm --filter @edgelab/worker run backfill"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "26.6.3",
+    "eslint": "10.11.0",
+    "eslint-config-prettier": "10.1.8",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "eslint-plugin-react-refresh": "0.5.7",
+    "fast-check": "4.10.2",
+    "globals": "17.12.0",
+    "prettier": "3.9.9",
+    "rimraf": "6.0.1",
+    "tsx": "4.23.15",
+    "turbo": "2.11.4",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.70.1",
+    "vitest": "5.0.2"
+  }
+}

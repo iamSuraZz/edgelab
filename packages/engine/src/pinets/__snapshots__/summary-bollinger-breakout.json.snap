@@ -1,0 +1,13 @@
+{
+  "barsProcessed": 2667,
+  "closedTrades": 46,
+  "netprofit": -0.23,
+  "openTrades": 1,
+  "orderLogSize": 112,
+  "plots": [
+    "Basis",
+    "Lower",
+    "Upper",
+  ],
+  "suppressedOrders": 3,
+}

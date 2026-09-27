@@ -1,0 +1,163 @@
+@import 'tailwindcss';
+
+/* Class-based dark mode — the toggle flips `.dark` on <html>. */
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * Semantic tokens, shadcn/ui convention. Components reference the semantic name
+ * (bg-surface, text-muted) rather than a raw palette step, so retheming is a change
+ * in this one file.
+ */
+:root {
+  --background: hsl(0 0% 100%);
+  --foreground: hsl(222 47% 11%);
+  --surface: hsl(210 40% 98%);
+  --surface-hover: hsl(210 40% 94%);
+  --border: hsl(214 32% 91%);
+  --muted: hsl(215 16% 42%);
+  --primary: hsl(221 83% 53%);
+  --primary-foreground: hsl(0 0% 100%);
+  --accent: hsl(142 71% 28%);
+  --destructive: hsl(0 72% 45%);
+  --ring: hsl(221 83% 53%);
+}
+
+.dark {
+  --background: hsl(222 47% 7%);
+  --foreground: hsl(210 40% 96%);
+  --surface: hsl(222 40% 11%);
+  --surface-hover: hsl(222 33% 16%);
+  --border: hsl(217 28% 20%);
+  --muted: hsl(215 20% 62%);
+  --primary: hsl(217 91% 66%);
+  --primary-foreground: hsl(222 47% 7%);
+  --accent: hsl(142 69% 52%);
+  --destructive: hsl(0 63% 68%);
+  --ring: hsl(217 91% 66%);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-surface-hover: var(--surface-hover);
+  --color-border: var(--border);
+  --color-muted: var(--muted);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-accent: var(--accent);
+  --color-destructive: var(--destructive);
+  --color-ring: var(--ring);
+
+  --font-mono: ui-monospace, SFMono-Regular, 'JetBrains Mono', Menlo, Consolas, monospace;
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Tabular figures keep metric columns from jittering as values change. */
+  .numeric {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/*
+ * A visible focus ring, everywhere, for keyboard users only.
+ *
+ * `:focus-visible` rather than `:focus` so a mouse click does not leave a ring behind — that is
+ * the reason focus outlines get removed wholesale, and removing them is what makes an app
+ * unusable from the keyboard. Density is the house style here, so the ring is offset rather than
+ * thick: it stays legible against the surface colours without pushing layout around.
+ */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* The main region is only focusable as the skip link's target; a ring there is just noise. */
+main:focus-visible {
+  outline: none;
+}
+
+/*
+ * Print (spec 05: "print stylesheet for PDF").
+ *
+ * A report is the one thing in this app anyone prints, so printing targets the report and hides
+ * everything that is navigation or interaction. Colours are forced to light regardless of the
+ * viewer's theme — a dark report wastes a cartridge and prints grey text on grey.
+ */
+@media print {
+  :root,
+  .dark {
+    --background: #ffffff;
+    --foreground: #111827;
+    --surface: #ffffff;
+    --surface-hover: #ffffff;
+    --border: #d1d5db;
+    --muted: #4b5563;
+  }
+
+  /* Chrome drops backgrounds by default; the KPI strip and badges depend on them. */
+  * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* Navigation, controls and anything that only exists to be clicked. */
+  aside,
+  nav,
+  [data-print='hide'],
+  button:not([data-print='keep']) {
+    display: none !important;
+  }
+
+  html,
+  body,
+  main {
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  /* Panels scroll on screen; on paper they must simply be as tall as their content. */
+  [data-testid='studio'],
+  .overflow-auto,
+  .overflow-hidden {
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
+  }
+
+  /* Keep a metric table or a trade row from being split across a page break. */
+  table,
+  dl,
+  section {
+    break-inside: avoid;
+  }
+
+  /* A link's href is invisible on paper, so the run URL is printed beside it. */
+  a[href^='http']::after {
+    content: ' (' attr(href) ')';
+    font-size: 9px;
+    color: #6b7280;
+  }
+
+  @page {
+    margin: 12mm;
+  }
+}

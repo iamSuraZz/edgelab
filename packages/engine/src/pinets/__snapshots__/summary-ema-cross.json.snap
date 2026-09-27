@@ -1,0 +1,12 @@
+{
+  "barsProcessed": 2667,
+  "closedTrades": 85,
+  "netprofit": -0.05,
+  "openTrades": 1,
+  "orderLogSize": 89,
+  "plots": [
+    "Fast EMA",
+    "Slow EMA",
+  ],
+  "suppressedOrders": 3,
+}

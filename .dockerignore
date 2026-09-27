@@ -1,0 +1,29 @@
+# Keep the build context small and never ship host artefacts into an image.
+# Critically, node_modules must NOT be copied: pnpm's store is a symlink forest
+# whose links point at host paths and would shadow the in-image install.
+
+**/node_modules
+**/dist
+**/.turbo
+**/coverage
+.git
+.github
+
+# Secrets. The image reads config from the environment, never from a file.
+.env
+.env.*
+!.env.example
+!.env.prod.example
+
+# Local market-data cache; the container uses a named volume instead.
+.cache
+**/*.log
+
+# Editor / OS
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+
+# Docs and specs are not needed at runtime.
+docs
