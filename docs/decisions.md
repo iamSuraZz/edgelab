@@ -1335,3 +1335,25 @@ out-of-sample window simply contained a different market. Trending-to-ranging is
 over a two-year span, and calling that overfitting is a false positive that would discredit the whole
 report. Per A24, regimes are labelled from D1 values up to the previous day's close, so the mix
 itself carries no look-ahead.
+
+## A31 · Follow-up after slice D: spread on resting fills from the replay, not per fill
+
+Not now. Recorded so the reasoning is not lost.
+
+The cost overlay charges spread per round trip regardless of how each leg filled (A19). That is right
+for a MARKET fill, which genuinely crosses the book at the moment it happens. It is the wrong model
+for a stop or a limit: a resting order does not pay a spread when it fills, it fills when the
+relevant side of the book reaches its level. The cost of the spread there is not a charge at all —
+it is a difference in TIMING, and sometimes in whether the fill happened.
+
+The M1 replay already measures exactly that. It walks each holding period with sells on the bid and
+buys on the ask and reports what really triggered, including stops that fired earlier than the engine
+thought and targets that never fired at all (A22), with the P&L correction attached. So the honest
+model is: market fills keep the per-fill spread charge, and stop and limit fills take their spread
+effect from the replay's measured correction instead.
+
+Doing it now would be premature. The replay currently reports `n/a` for trailing stops (A23) and for
+unresolvable multi-bracket exits (A25), so a straight substitution would silently un-charge the
+spread on precisely the trades it cannot measure — turning a modelling gap into free execution. That
+has to be closed first, which is what A26 (trailing-stop replay) is for.
+
