@@ -95,7 +95,7 @@ pnpm run import:file mt5 EURUSD <abs.csv> 120        # 120 = broker server UTC o
 
 ## Current status — NOT v1.0
 
-Green: `build` 9/9, `typecheck` 16/16, `lint` clean, **776 tests** (`pnpm test`).
+Green: `build` 9/9, `typecheck` 16/16, `lint` clean, **801 tests** (`pnpm test`).
 CI runs all five checks on every push — see `.github/workflows/ci.yml`.
 
 **Verified against the real docker stack:**
@@ -170,10 +170,9 @@ roadmap's "in the browser" is NOT met.
 | CI on the public repo (A9)                                         | see badge / Actions tab      |
 | Exness imports + MT5 parity test (A12)                             | **NOT PLANNED** — no exports |
 
-Still to build in step 1, in this order: **M1 ambiguity replay** and **cost stress** (the rest of
-execution bias), then OOS split, walk-forward (A3 timing first), **sealed holdout** (A17), timeframe
-matrix + regimes, and Monte Carlo. Each must run through `pnpm validate` on the 2022 data before the
-next starts.
+Still to build in step 1, in this order: **cost stress** (the last of execution bias), then OOS
+split, walk-forward (A3 timing first), **sealed holdout** (A17), timeframe matrix + regimes, and
+Monte Carlo. Each must run through `pnpm validate` on the 2022 data before the next starts.
 
 **Price basis is now explicit per feed (A19).** `bid` for Dukascopy and MT5 imports, `mid` for Twelve
 Data, `last` for Binance klines (trade prints, treated as mid, labelled separately). `deriveQuotes`
@@ -194,6 +193,26 @@ the price LEVELS, and that is where the asymmetry check finds it.**
 > minutes than the bid feed over the window they share. **Still open: this feed is MID, not bid**
 > (+0.65x spread above the bid feed), and the cost overlay assumes bid — so its cost attribution is
 > wrong on this feed even though the total is close.
+
+**The M1 intrabar replay is done and it found real flips on BOTH feeds (A22).** It walks every
+resting-order trade minute by minute with sells on the bid and buys on the ask, and catches the error
+no exit-based check can: a stop crossed on an earlier bar whose stored prices never reached it.
+
+| feed               | basis | exits | missed stops | phantom targets | P&L correction |
+| ------------------ | ----- | ----- | ------------ | --------------- | -------------- |
+| EURUSD (dukascopy) | bid   | 89    | **1**        | 0               | -255.00        |
+| EURUSD.twelvedata  | mid   | 361   | **4**        | 10              | -850.00        |
+
+Zero phantom targets on the bid feed is the correctness signal — long targets must reproduce exactly
+there — and the mid feed's 10 phantoms match A20's 10 flips, found independently. Trade 73 on the
+clean feed entered and exited inside ONE H1 bar whose M1 low went well through its stop, and the
+engine booked the target: the engine resolves intrabar ambiguity optimistically.
+
+**Every execution-bias total now also reports per fill, in pips and ticks (A21)**, split by gap type.
+That immediately exposed a defect: the same-bar estimate was scoring 361 bracket exits as market
+fills, inflating it to 1.26 pips per fill. Corrected, it is **-0.01 per fill (-0.00 pips)** over the
+361 genuine market entries — near zero, because on an M1-resampled feed one bar's close and the next
+bar's open are adjacent minutes.
 
 **Bid/ask asymmetry is done and verified on both feeds (A20)**, and it discriminates: on the
 dukascopy bid feed all 89 level exits are flattered by $99.07, entirely on the shorts, with no
@@ -225,11 +244,13 @@ keeping both layers: truncation covers unbounded leaks, splicing covers bounded 
 | `prefix-invariance.ts` — cutoffs + margin (A1)            | done, 16 tests              |
 | `same-bar.ts` estimate (A5)                               | done, 13 tests              |
 | `price-basis.ts` (A19) — one derivation, three consumers  | done, 16 tests              |
+| `per-fill.ts` (A21) — pips/ticks + gap breakdown          | done, 11 tests              |
 | A2 statuses `pass/warn/fail/n·a` + Inconclusive verdict   | done                        |
 | `validateRun` + `pnpm validate <runId>`                   | done, run on the real stack |
 | **Future-splice (A1b)** — the layer that catches the leak | done, 15 tests, verified    |
 | Fill audit + **bid/ask asymmetry (A20)**                  | done, verified on real data |
-| Execution bias remainder (M1 replay, cost stress)         | **not started**             |
+| **M1 intrabar replay (A22)** — missed stops + phantoms    | done, 14 tests, verified    |
+| Cost stress                                               | **not started**             |
 | OOS split, walk-forward, sealed holdout                   | **not started**             |
 | Timeframe matrix, regimes, Monte Carlo                    | **not started**             |
 | `POST /backtests/:id/validate` + SSE (step 2)             | **not started**             |
