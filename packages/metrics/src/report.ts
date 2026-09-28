@@ -151,7 +151,7 @@ export function buildMetricsReport(input: MetricsInput): MetricsReport {
 
   /* -------------------------------------------------------------- costs */
 
-  const costs = computeCostMetrics(input.trades, input.instrument);
+  const costs = computeCostMetrics(input.trades, input.instrument, input.chargeableSides);
   if (costs.costDragPct === null && input.trades.length > 0) {
     notes.push('Gross profit before costs is zero, so cost drag is undefined.');
   }

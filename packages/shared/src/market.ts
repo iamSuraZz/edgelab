@@ -186,7 +186,22 @@ export interface CostedTrade {
   /** Engine P&L before our overlay, for cross-checking. In the ACCOUNT currency. */
   readonly grossPnl: AccountMoney;
   readonly commission: AccountMoney;
+  /**
+   * Slippage CHARGED, on market and stop fills only.
+   *
+   * Limit fills are refunded — see `slippageRefund`.
+   */
   readonly slippageCost: AccountMoney;
+  /**
+   * Slippage the engine applied to LIMIT fills, credited back.
+   *
+   * A limit order cannot fill worse than its price in a real market; its real risk is not filling at
+   * all, which the phantom-target check measures separately. PineTS slips limit fills anyway (A28),
+   * so the amount is measured per fill and added back here rather than left to penalise every
+   * take-profit for a risk it does not carry. Reported as its own line so the correction is visible
+   * rather than silently folded into the P&L.
+   */
+  readonly slippageRefund: AccountMoney;
   readonly spreadCost: AccountMoney;
   readonly financingCost: AccountMoney;
   /** P&L after ALL costs, in the ACCOUNT currency. Every statistic is computed from this. */

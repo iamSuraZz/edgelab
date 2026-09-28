@@ -32,9 +32,11 @@ export const DIVERGENT_STRATEGY_PROPS: ReadonlyMap<string, string> = new Map([
     'slippage',
     'PineTS applies slippage to LIMIT fills as well as market and stop fills. TradingView never ' +
       'slips a limit order — it fills at its price or better by definition — so a bracket ' +
-      'strategy is charged slippage here on both legs where TradingView would charge it on one. ' +
-      'Measured per fill: with slippage=15, market, stop AND limit fills all moved exactly 15 ' +
-      'ticks adversely.',
+      'strategy would otherwise be charged slippage here on both legs where TradingView charges ' +
+      'it on one. EdgeLab CORRECTS for this: the limit-fill slippage is measured per fill and ' +
+      'credited back, shown in the cost waterfall as "limit-fill slippage refunded". Your net ' +
+      'P&L therefore matches TradingView’s treatment; only the engine’s intermediate ' +
+      'fill prices differ.',
   ],
 ]);
 

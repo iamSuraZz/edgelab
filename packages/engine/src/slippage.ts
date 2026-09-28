@@ -209,7 +209,30 @@ export function summariseSlippage(
     .filter((r) => r.fills > 0);
 }
 
-/** Total measured slippage for one trade, in PRICE units. */
-export function slippageForTrade(rows: readonly FillSlippage[], tradeSeq: number): number {
-  return rows.reduce((sum, r) => (r.tradeSeq === tradeSeq ? sum + r.slippagePrice : sum), 0);
+/**
+ * Measured slippage for one trade, in PRICE units, restricted to the given fill types.
+ *
+ * The split matters because limit fills are refunded: `slippageForTrade(rows, seq, CHARGED_TYPES)`
+ * is what the user pays and `slippageForTrade(rows, seq, ['limit'])` is what is given back.
+ */
+export function slippageForTrade(
+  rows: readonly FillSlippage[],
+  tradeSeq: number,
+  types?: readonly FillType[],
+): number {
+  return rows.reduce(
+    (sum, r) =>
+      r.tradeSeq === tradeSeq && (types === undefined || types.includes(r.type))
+        ? sum + r.slippagePrice
+        : sum,
+    0,
+  );
+}
+
+/** The fill types a real broker would slip. A limit order fills at its price or better. */
+export const CHARGED_FILL_TYPES: readonly FillType[] = ['market', 'stop', 'unknown'];
+
+/** How many of a trade's fills are chargeable, for the analytical break-even denominator. */
+export function chargeableSides(rows: readonly FillSlippage[], tradeSeq: number): number {
+  return rows.filter((r) => r.tradeSeq === tradeSeq && CHARGED_FILL_TYPES.includes(r.type)).length;
 }

@@ -1277,3 +1277,61 @@ construction rather than by luck.
 Cross-check re-run afterwards, unchanged: zero-slippage agrees exactly (0.84 pips per side either
 way, break-even 5.22x actual costs); with slippage the two sit 6.1% apart with the moving trade set
 as the named cause.
+
+## A29 · Limit-fill slippage is refunded
+
+A28 established that PineTS slips limit fills and TradingView does not. This decides what to do
+about it: credit it back.
+
+A limit order cannot fill worse than its price in a real market — that is what a limit order is. Its
+real risk is not filling at all, and the phantom-target check (A22) already measures exactly that,
+trade by trade. Charging slippage on top penalises every take-profit for a risk it does not carry,
+skews any comparison between exit styles (a bracket strategy pays twice, a signal-exit strategy
+once), and makes TradingView comparison impossible whenever slippage is on.
+
+The measured per-fill amount (A28) is added back as its own waterfall line — "limit-fill slippage
+refunded: engine divergence" — rather than folded silently into P&L. A correction the user cannot see
+is indistinguishable from a bug.
+
+**The P&L identity stays exact.** The engine already took the slippage out of the fill price, so the
+refund appears in gross and is NOT subtracted again on the way to net:
+
+    grossPnl = enginePnl + commission + slippageCost + slippageRefund
+    netPnl   = enginePnl + slippageRefund - spreadCost - financingCost
+
+`totalCosts` excludes the refund deliberately — it was never a cost that was charged and returned, it
+is a correction — so `grossBeforeCosts - totalCosts === netProfit` continues to hold.
+
+Verified on `rsi-mean-reversion`, EURUSD H1 2022-01-01 .. 2022-07-01 with `slippage=15`: 30 limit
+fills at $15 each is **$450.00 refunded**, net profit improves from -1,588.05 to **-1,138.05** and
+total costs fall from 3,023.05 to 2,573.05 — each by exactly $450.00.
+
+**The analytical break-even now counts only chargeable sides.** A limit fill cannot degrade, so it is
+not a side execution can get worse on. The denominator is a per-trade count rather than a flat factor
+of two, and the same array is shared with the cost stress rather than recomputed — computing it twice
+is how two figures that should be identical end up several percent apart for a reason nobody can
+name. On the zero-slippage control this moves the figure from 0.84 to 1.06 pips per side, which is
+the honest number: 36 of the 89 trades exit on a limit and contribute one side, not two.
+
+Cross-check re-run afterwards. The control agrees **exactly** — 1.06 pips per side either way,
+break-even at 5.22x actual costs. With slippage on the two sit 11.6% apart, with the same named cause
+as before: scaling costs changes the trade set and the fill mix, so a single baseline denominator
+cannot describe every point on the ladder while the analytical form assumes linearity.
+
+The compatibility warning now says the platform corrects for the divergence rather than merely
+reporting it, so a user reading it knows their net P&L already matches TradingView's treatment and
+only the engine's intermediate fill prices differ.
+
+Schema: `run_trades.slippage_refund` (migration 0004). Persisted rather than derived, because a
+stored run should show what was actually credited.
+
+## A30 · Regime mix belongs in the OOS report
+
+Recorded now, to be done when regimes land (step 5). Each segment of the OOS split — and each
+walk-forward fold — reports the regime mix of its own window alongside its metrics.
+
+Without it, a strategy that performed differently out of sample is indistinguishable from one whose
+out-of-sample window simply contained a different market. Trending-to-ranging is the ordinary case
+over a two-year span, and calling that overfitting is a false positive that would discredit the whole
+report. Per A24, regimes are labelled from D1 values up to the previous day's close, so the mix
+itself carries no look-ahead.

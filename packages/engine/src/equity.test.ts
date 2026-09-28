@@ -77,6 +77,7 @@ function costed(over: TradeOverrides = {}): CostedTrade {
     grossPnl: accountMoney(grossPnl ?? 400),
     commission: accountMoney(0),
     slippageCost: accountMoney(0),
+    slippageRefund: accountMoney(0),
     spreadCost: accountMoney(0),
     financingCost: accountMoney(0),
     netPnl: accountMoney(netPnl ?? 400),

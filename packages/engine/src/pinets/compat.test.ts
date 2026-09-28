@@ -182,6 +182,8 @@ describe('divergent strategy props', () => {
     expect(found).toBeDefined();
     expect(found!.message).toContain('LIMIT');
     expect(found!.message).toContain('honoured');
+    // It must say the platform corrects for it, not merely that it diverges.
+    expect(found!.message).toContain('refunded');
   });
 
   it('does not call it ignored, because it is applied', () => {

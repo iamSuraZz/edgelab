@@ -1,0 +1,1 @@
+ALTER TABLE "run_trades" ADD COLUMN "slippage_refund" double precision DEFAULT 0 NOT NULL;

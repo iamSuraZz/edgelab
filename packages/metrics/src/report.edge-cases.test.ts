@@ -270,6 +270,7 @@ describe('cost drag edge cases', () => {
       grossPnl: accountMoney(netPnl + costs),
       commission: accountMoney(costs),
       slippageCost: accountMoney(0),
+      slippageRefund: accountMoney(0),
       spreadCost: accountMoney(0),
       financingCost: accountMoney(0),
       netPnl: accountMoney(netPnl),

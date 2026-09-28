@@ -482,6 +482,12 @@ function printRun(label: string, runId: string, run: OrchestratedRun, warningCou
   if (warningCount > 0) {
     console.log(`   ${'Compatibility'.padEnd(20)} ${String(warningCount)} warning(s)`);
   }
+  const refunded = run.metrics.costs.slippageRefunded.total;
+  if (refunded !== 0) {
+    console.log(
+      `   ${'Slippage refunded'.padEnd(20)} ${refunded.toFixed(2)}  (limit fills; engine divergence)`,
+    );
+  }
   // Measured, per fill type — the only way to tell whether a limit fill actually slips.
   if (run.slippageByType.length > 0) {
     const shown = run.slippageByType

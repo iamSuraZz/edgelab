@@ -11,7 +11,7 @@ import type {
 } from '@edgelab/shared';
 
 import type { EngineTrade } from './pine-engine';
-import { slippageForTrade, type FillSlippage } from './slippage';
+import { CHARGED_FILL_TYPES, slippageForTrade, type FillSlippage } from './slippage';
 
 /**
  * The broker cost overlay (spec 04, amended by D5 and D6). Pure.
@@ -255,9 +255,13 @@ export interface ApplyCostsParams {
  *
  * The P&L identity, which `packages/metrics/src/cost-drag.ts` depends on:
  *
- *     grossPnl = enginePnl + commission + slippageCost      (P&L with NO costs at all)
+ *     grossPnl = enginePnl + commission + slippageCost + slippageRefund   (no costs at all)
  *     netPnl   = grossPnl - commission - slippageCost - spreadCost - financingCost
- *              = enginePnl - spreadCost - financingCost
+ *              = enginePnl + slippageRefund - spreadCost - financingCost
+ *
+ * `slippageRefund` appears in gross because the engine DID take it out of the fill price, and is
+ * not subtracted again on the way to net — that is what refunding it means. The identity
+ * `gross - totalCosts === net` therefore still holds with `totalCosts` excluding the refund.
  *
  * Commission and slippage are already inside `enginePnl`, so they are added back to recover
  * the true gross and then subtracted again in the waterfall. They are not charged twice.
@@ -323,12 +327,20 @@ export function applyCosts(params: ApplyCostsParams): CostedTrade[] {
     const slippagePrice =
       measuredSlippage === undefined
         ? 2 * config.slippagePoints * symbol.mintick
-        : slippageForTrade(measuredSlippage, i + 1);
+        : slippageForTrade(measuredSlippage, i + 1, CHARGED_FILL_TYPES);
     const slippageCost =
       priceDeltaToQuote(slippagePrice, positionUnits, symbol) * quoteToAccount(exitTime);
 
+    // The engine slipped LIMIT fills too (A28), which no real broker does — a limit fills at its
+    // price or better. That amount is credited back, as its own line rather than silently.
+    const refundPrice =
+      measuredSlippage === undefined ? 0 : slippageForTrade(measuredSlippage, i + 1, ['limit']);
+    const slippageRefund =
+      priceDeltaToQuote(refundPrice, positionUnits, symbol) * quoteToAccount(exitTime);
+
     const enginePnl = (trade.netPnl ?? 0) * quoteToAccount(exitTime);
-    const netPnl = enginePnl - spreadCost - financingCost;
+    // The refund is ADDED because the engine already took it out of the fill price.
+    const netPnl = enginePnl + slippageRefund - spreadCost - financingCost;
 
     return {
       seq: i + 1,
@@ -343,6 +355,7 @@ export function applyCosts(params: ApplyCostsParams): CostedTrade[] {
       grossPnl: accountMoney(enginePnl),
       commission: accountMoney(commission),
       slippageCost: accountMoney(slippageCost),
+      slippageRefund: accountMoney(slippageRefund),
       spreadCost: accountMoney(spreadCost),
       financingCost: accountMoney(financingCost),
       netPnl: accountMoney(netPnl),

@@ -44,6 +44,14 @@ export interface MetricsInput {
   readonly openPnl?: AccountMoney;
   /** Return of buying and holding the instrument over the same window, in percent. */
   readonly buyAndHoldReturnPct?: number | null;
+  /**
+   * How many of each trade's fills a real broker would slip, aligned with `trades`.
+   *
+   * Drives the break-even denominator. Two per trade is the old assumption and stays the default;
+   * a bracket exit filled by a LIMIT is not chargeable, so those trades contribute one side, and
+   * counting two would understate how far execution can degrade before the edge dies.
+   */
+  readonly chargeableSides?: readonly number[];
   /** Bars where a position was open, for exposure. */
   readonly barsInMarket?: number;
   readonly totalBars?: number;
@@ -157,6 +165,13 @@ export interface CostBucket {
 export interface CostMetrics {
   readonly commission: CostBucket;
   readonly slippage: CostBucket;
+  /**
+   * Slippage the engine applied to LIMIT fills and this platform credited back.
+   *
+   * Not part of `totalCosts` — it was never a cost, it is a correction for an engine divergence
+   * (A28/A29). Shown as its own waterfall line so the adjustment is visible.
+   */
+  readonly slippageRefunded: CostBucket;
   readonly spread: CostBucket;
   readonly financing: CostBucket;
   readonly totalCosts: number;

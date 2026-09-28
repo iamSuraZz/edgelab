@@ -537,9 +537,11 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
     // The same denominator the metrics report uses, passed rather than recomputed so a different
     // lots-versus-units reading cannot make the two disagree for a spurious reason.
     twoSidedUnitValue:
-      2 *
-      full.trades.reduce((u, t) => u + Math.abs(t.qty) * symbolRow.contractSize, 0) *
-      symbolRow.pointValue,
+      full.trades.reduce(
+        (u, t, i) =>
+          u + (full.chargeableSidesPerTrade[i] ?? 2) * Math.abs(t.qty) * symbolRow.contractSize,
+        0,
+      ) * symbolRow.pointValue,
     analyticalPerSidePrice: full.metrics.costs.breakEvenPerSidePrice,
     scale: { mintick: symbolRow.mintick, pipSize: symbolRow.pipSize },
     slippageFills,

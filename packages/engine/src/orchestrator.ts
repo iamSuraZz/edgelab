@@ -11,7 +11,12 @@ import type {
 import { ExitLevelIndex, ZERO_COSTS, priceBasisForSource } from '@edgelab/shared';
 
 import { applyCosts, resolveQuoteToAccount, type QuoteToAccount } from './costs';
-import { measureFillSlippage, summariseSlippage, type SlippageByType } from './slippage';
+import {
+  chargeableSides,
+  measureFillSlippage,
+  summariseSlippage,
+  type SlippageByType,
+} from './slippage';
 import {
   MissingConversionDataError,
   conversionWindow,
@@ -98,6 +103,14 @@ export interface OrchestratedRun {
   readonly totalMs: number;
   /** Measured slippage per fill type, so a report can state which fills actually slip. */
   readonly slippageByType: readonly SlippageByType[];
+  /**
+   * Chargeable fills per trade, aligned with `trades`.
+   *
+   * Exposed so any other break-even calculation uses the SAME denominator the metrics report used.
+   * Computing it twice is how two figures that should be identical end up 7% apart for a reason
+   * nobody can name.
+   */
+  readonly chargeableSidesPerTrade: readonly number[];
 }
 
 export async function orchestrateRun(params: OrchestrateParams): Promise<OrchestratedRun> {
@@ -218,6 +231,10 @@ export async function orchestrateRun(params: OrchestrateParams): Promise<Orchest
     measuredSlippage,
   });
 
+  // Counted once and shared, so the metrics report and any downstream break-even divide by the
+  // same denominator.
+  const sides = costed.map((_t, i) => chargeableSides(measuredSlippage, i + 1));
+
   report(60, 'reconstructing equity');
   const openTrades = engineResult.trades.filter((t) => t.status === 'open');
 
@@ -274,6 +291,8 @@ export async function orchestrateRun(params: OrchestrateParams): Promise<Orchest
       pointValue: params.symbol.pointValue,
       contractSize: params.symbol.contractSize,
     },
+    // Limit fills cannot slip, so they are not a side execution can degrade on.
+    chargeableSides: sides,
     rfAnnual: params.rfAnnual ?? 0,
     openPnl: equity.openPnl,
     buyAndHoldReturnPct: buyAndHoldReturnPct(windowBars),
@@ -296,6 +315,7 @@ export async function orchestrateRun(params: OrchestrateParams): Promise<Orchest
     engineMs,
     totalMs: Date.now() - startedAt,
     slippageByType: summariseSlippage(measuredSlippage, params.symbol.mintick),
+    chargeableSidesPerTrade: sides,
   };
 }
 

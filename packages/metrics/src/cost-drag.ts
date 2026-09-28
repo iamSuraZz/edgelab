@@ -15,6 +15,7 @@ function bucket(values: readonly number[], tradeCount: number): CostBucket {
 export function computeCostMetrics(
   trades: readonly CostedTrade[],
   instrument: MetricsInstrument,
+  chargeableSides?: readonly number[],
 ): CostMetrics {
   const count = trades.length;
 
@@ -30,11 +31,18 @@ export function computeCostMetrics(
     trades.map((t) => t.spreadCost),
     count,
   );
+  const slippageRefunded = bucket(
+    trades.map((t) => t.slippageRefund),
+    count,
+  );
   const financing = bucket(
     trades.map((t) => t.financingCost),
     count,
   );
 
+  // The refund is deliberately absent: it is not a cost that was charged and then returned, it is
+  // an engine divergence corrected before net P&L. Including it here would break the identity
+  // `grossBeforeCosts - totalCosts === netProfit`.
   const totalCosts = commission.total + slippage.total + spread.total + financing.total;
   const netProfit = sum(trades.map((t) => t.netPnl));
   const grossBeforeCosts = netProfit + totalCosts;
@@ -43,11 +51,12 @@ export function computeCostMetrics(
   // denominator (costs exactly cancel the gross) is genuinely undefined.
   const costDragPct = grossBeforeCosts === 0 ? null : (totalCosts / grossBeforeCosts) * 100;
 
-  const breakEven = breakEvenPerSide(trades, instrument, netProfit);
+  const breakEven = breakEvenPerSide(trades, instrument, netProfit, chargeableSides);
 
   return {
     commission,
     slippage,
+    slippageRefunded,
     spread,
     financing,
     totalCosts,
@@ -68,15 +77,22 @@ export function computeCostMetrics(
  * converted to units via contractSize. Reading it as lots would give a number ~100,000x too
  * large and meaningless as a price.
  *
- * The factor of 2 is because the cost is paid on entry AND exit.
+ * The factor of 2 WAS because the cost is paid on entry and exit. It is now a per-trade count: a
+ * bracket exit that filled on a limit cannot be slipped, so that trade has one chargeable side, not
+ * two. Assuming two would understate how far execution can degrade before the edge dies.
  */
 function breakEvenPerSide(
   trades: readonly CostedTrade[],
   instrument: MetricsInstrument,
   netProfit: number,
+  chargeableSides?: readonly number[],
 ): Pick<CostMetrics, 'breakEvenPerSidePrice' | 'breakEvenPerSideTicks' | 'breakEvenPerSidePips'> {
-  const totalUnits = sum(trades.map((t) => Math.abs(t.qty) * instrument.contractSize));
-  const denominator = 2 * totalUnits * instrument.pointValue;
+  // Sides are counted per trade rather than assumed to be two, because a limit fill cannot slip and
+  // so cannot degrade. Falls back to two per trade when the caller did not measure the fill mix.
+  const denominator =
+    sum(
+      trades.map((t, i) => (chargeableSides?.[i] ?? 2) * Math.abs(t.qty) * instrument.contractSize),
+    ) * instrument.pointValue;
 
   if (denominator === 0 || !Number.isFinite(denominator)) {
     return {

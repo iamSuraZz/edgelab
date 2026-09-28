@@ -15,7 +15,9 @@ const MON_0000 = Date.UTC(2022, 0, 10, 0, 0);
 
 describe('classifyGap', () => {
   it('calls one timeframe step normal', () => {
-    expect(classifyGap(Date.UTC(2022, 0, 5, 10, 0), Date.UTC(2022, 0, 5, 11, 0), H1)).toBe('normal');
+    expect(classifyGap(Date.UTC(2022, 0, 5, 10, 0), Date.UTC(2022, 0, 5, 11, 0), H1)).toBe(
+      'normal',
+    );
   });
 
   it('tolerates a bucket landing slightly off its nominal step', () => {
@@ -30,7 +32,9 @@ describe('classifyGap', () => {
 
   it('calls a mid-week overnight gap a session gap', () => {
     // Tuesday 22:00 to Wednesday 01:00 — three hours on an H1 chart, no Saturday crossed.
-    expect(classifyGap(Date.UTC(2022, 0, 4, 22, 0), Date.UTC(2022, 0, 5, 1, 0), H1)).toBe('session');
+    expect(classifyGap(Date.UTC(2022, 0, 4, 22, 0), Date.UTC(2022, 0, 5, 1, 0), H1)).toBe(
+      'session',
+    );
   });
 
   it('calls a Friday-to-Monday DAILY step a weekend, which no duration threshold would', () => {

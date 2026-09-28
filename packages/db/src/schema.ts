@@ -255,6 +255,8 @@ export const runTrades = pgTable(
     grossPnl: doublePrecision('gross_pnl').notNull(),
     commission: doublePrecision('commission').notNull().default(0),
     slippageCost: doublePrecision('slippage_cost').notNull().default(0),
+    /** Limit-fill slippage credited back (A29). Not a cost; a correction for an engine divergence. */
+    slippageRefund: doublePrecision('slippage_refund').notNull().default(0),
     spreadCost: doublePrecision('spread_cost').notNull().default(0),
     financingCost: doublePrecision('financing_cost').notNull().default(0),
     /** After ALL costs. Every statistic is computed from this. */

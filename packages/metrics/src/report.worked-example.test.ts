@@ -56,6 +56,7 @@ const TRADES: CostedTrade[] = SPECS.map((s, i) => ({
   grossPnl: accountMoney(s.gross),
   commission: accountMoney(7),
   slippageCost: accountMoney(3),
+  slippageRefund: accountMoney(0),
   spreadCost: accountMoney(10),
   financingCost: accountMoney(0),
   netPnl: accountMoney(s.net),

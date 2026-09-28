@@ -27,6 +27,7 @@ function trade(seq: number, netPnl: number, side: 'long' | 'short' = 'long'): Co
     grossPnl: accountMoney(netPnl + 20),
     commission: accountMoney(7),
     slippageCost: accountMoney(3),
+    slippageRefund: accountMoney(0),
     spreadCost: accountMoney(10),
     financingCost: accountMoney(0),
     netPnl: accountMoney(netPnl),
