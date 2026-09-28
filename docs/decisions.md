@@ -1865,3 +1865,50 @@ conventions into one the compiler asks for at every call site.
 
 Not now: the four call sites are correct as they stand, and replacing working guards mid-slice buys
 nothing. It belongs with the other post-slice-D cleanups (A26, A31).
+
+## A47 · Monte Carlo, and what reshuffling actually tells you
+
+Built under A43: per-trade RETURNS are permuted under percent-of-equity sizing, dollar P&L under
+fixed. `cash` counts as fixed — a fixed cash amount per trade does not scale with equity either. The
+mode is READ from `default_qty_type` on the compile result, with a run-level override winning exactly
+as the engine treats it, and `unknown` is a real outcome reported as `n/a` rather than a guess.
+
+**The final result is invariant under reshuffling, and that is the point rather than a defect.**
+Summing dollars and multiplying growth factors are both commutative, so every ordering of the same
+trades ends in the same place. Only the PATH moves. Two things follow:
+
+- The check reports a distribution of DRAWDOWN, not of returns. A single backtest shows one draw from
+  that distribution, and the drawdown it happens to display is not the drawdown to size from.
+- **A Monte Carlo that reports a spread of final returns has shuffled the wrong quantity.** That is
+  the diagnostic A43 exists to prevent, and it is now a property the tests assert directly: two runs
+  with different seeds must produce an identical final return under both sizing modes.
+
+Verified on `rsi-mean-reversion`, EURUSD H1 2022:
+
+    median drawdown 8.7%, 95th percentile 14.0%, against the 8.3% this run actually showed
+
+So the observed curve is slightly better than typical but well inside the distribution — a `pass`. A
+run in the bottom quarter warns, because sizing taken from a favourable draw is sized from luck; any
+ordering reaching zero fails outright, since the same trades in a different sequence would have ended
+the account.
+
+One test fixture needed correcting, and the correction is worth keeping: putting every loss LAST does
+not produce a favourable ordering, it produces the worst one — a peak is built and then given back
+without recovery. A favourable ordering is an evenly alternating one, where no losing run ever
+accumulates.
+
+## Step 1 of slice D is complete
+
+All seventeen checks now run in one pass, in 6.7s on six months of H1:
+
+    Sealed holdout · Look-ahead (static lint, prefix invariance, future splice, causality)
+    Execution (fill audit, bid/ask asymmetry, M1 intrabar replay, cost stress)
+    Out-of-sample split · Rolling out-of-sample · Regime mix · Timeframe matrix
+    Monte Carlo · Bar integrity · Trades within data window · Trade sample size
+
+Walk-forward optimisation (A35) sits beside them as an opt-in check with its own CLI, because 1,204
+engine runs cannot live in a suite that answers in seconds.
+
+What remains for slice D is step 2 (`POST /backtests/:id/validate` with SSE progress) and step 3 (the
+"Integrity & Overfitting" tab) — after which the DONE WHEN, which requires the whole thing exercised
+in a browser, can be met for the first time.

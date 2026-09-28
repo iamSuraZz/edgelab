@@ -20,6 +20,9 @@ import {
   analyseCostStress,
   analyseOosSplit,
   analyseTimeframeMatrix,
+  runMonteCarlo,
+  type MonteCarloResult,
+  type SizingMode,
   cellAvailability,
   type MatrixCell,
   type TimeframeMatrixResult,
@@ -210,6 +213,7 @@ export interface ValidationReport {
   readonly rollingOos: RollingOosResult | null;
   readonly regimes: RegimeBreakdown | null;
   readonly matrix: TimeframeMatrixResult | null;
+  readonly monteCarlo: MonteCarloResult | null;
   readonly elapsedMs: number;
 }
 
@@ -762,6 +766,35 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
 
   const matrix = analyseTimeframeMatrix({ cells: matrixCells, baseTimeframe: timeframe });
 
+  /* ------------------------------------------- Monte Carlo (spec 06 §3) */
+
+  report(99, 'monte carlo');
+
+  // The sizing mode is READ, not guessed (A43): `default_qty_type` is a declared strategy property,
+  // and a run-level override wins over the script's own declaration the same way it does for the
+  // engine. `unknown` is a real outcome — the check reports n/a rather than picking a quantity.
+  // `declaredProps` lives on the COMPILE result, not the run result. Compiling is ~14ms (A33), so
+  // reading the property is cheaper than parsing the source for it and cannot disagree with what
+  // the engine itself saw.
+  const compiled = await engine.compile(run.pineSource);
+  const sizingMode = resolveSizingMode(compiled.meta.declaredProps, asRecord(run.props));
+
+  // Return as a percentage of the equity the trade was sized against. Taken from the equity series
+  // rather than from initial capital, because under percent-of-equity sizing those differ by
+  // exactly the compounding this check must not reinvent.
+  const equityAt = new Map(full.equityClose.map((p) => [p.time, p.equity]));
+  const monteCarlo = runMonteCarlo({
+    trades: full.trades.map((t) => {
+      const base = equityAt.get(t.entryTime) ?? run.initialCapital;
+      return {
+        netPnl: t.netPnl,
+        returnPct: base > 0 ? (t.netPnl / base) * 100 : null,
+      };
+    }),
+    sizingMode,
+    initialCapital: run.initialCapital,
+  });
+
   /* --------------------------------------------------------- the checks */
 
   report(90, 'judging');
@@ -789,6 +822,7 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
     rollingOosResult(rollingOos),
     regimeResult(regimes),
     matrixResult(matrix),
+    monteCarloResult(monteCarlo),
     ...runChecks(BUILT_IN_CHECKS, {
       bars: full.engineResult.bars,
       timeframe,
@@ -845,6 +879,7 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
     rollingOos,
     regimes,
     matrix,
+    monteCarlo,
     elapsedMs: Date.now() - startedAt,
   };
 }
@@ -1736,4 +1771,61 @@ function matrixResult(m: TimeframeMatrixResult): CheckResult {
     detail: `${m.explanation} ${skippedNote}`.trim(),
     evidence,
   };
+}
+
+/**
+ * The strategy's position-sizing mode.
+ *
+ * Read from `default_qty_type`, with a run-level override taking precedence exactly as the engine
+ * treats it. `cash` counts as FIXED: a fixed cash amount per trade does not scale with equity, so
+ * its dollar result is the stationary quantity just as it is for fixed contracts.
+ *
+ * Anything unrecognised returns `unknown`, which the check reports as n/a. Guessing here would pick
+ * the quantity to permute, and picking wrong produces a distribution that looks authoritative and
+ * describes nothing (A43).
+ */
+function resolveSizingMode(
+  declared: readonly { readonly name: string; readonly value: unknown }[],
+  overrides: Record<string, unknown>,
+): SizingMode {
+  const fromOverride = overrides['default_qty_type'];
+  const fromScript = declared.find((p) => p.name === 'default_qty_type')?.value;
+  const value = fromOverride ?? fromScript;
+
+  if (value === 'percent_of_equity') return 'percent-equity';
+  if (value === 'fixed' || value === 'cash') return 'fixed';
+  return 'unknown';
+}
+
+/** Monte Carlo as a verdict. */
+function monteCarloResult(m: MonteCarloResult): CheckResult {
+  const base = {
+    id: 'overfitting-monte-carlo',
+    label: 'Monte Carlo (trade order)',
+    severity: 'warning' as const,
+  };
+
+  const evidence = {
+    iterations: m.iterations,
+    sizingMode: m.sizingMode,
+    quantity: m.quantity ?? 'none',
+    trades: m.trades,
+    observedMaxDrawdownPct: Number((m.observedMaxDrawdownPct ?? 0).toFixed(2)),
+    medianMaxDrawdownPct: Number((m.maxDrawdownPct?.p50 ?? 0).toFixed(2)),
+    p95MaxDrawdownPct: Number((m.maxDrawdownPct?.p95 ?? 0).toFixed(2)),
+    observedPercentile: Number(((m.observedPercentile ?? 0) * 100).toFixed(1)),
+    riskOfRuinPct: Number((m.riskOfRuinPct ?? 0).toFixed(2)),
+  };
+
+  if (m.verdict === 'n/a') {
+    return {
+      ...base,
+      status: 'n/a',
+      detail: m.explanation,
+      inconclusiveReason: m.inconclusiveReason ?? m.explanation,
+      evidence,
+    };
+  }
+
+  return { ...base, status: m.verdict, detail: m.explanation, evidence };
 }
