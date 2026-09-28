@@ -1,3 +1,4 @@
+import { perFillFigures, type InstrumentScale, type PerFillFigures } from './per-fill';
 import { blankCommentsAndStrings } from './static-lint';
 
 import {
@@ -87,6 +88,8 @@ export interface AsymmetryParams {
   readonly spreadAt: (barIndex: number) => number;
   /** Account-currency value of one price unit on one lot: `contractSize x pointValue x rate`. */
   readonly valuePerPricePerLot: number;
+  /** Tick and pip size, for the per-exit figures. */
+  readonly scale: InstrumentScale;
   /**
    * Which exits were resting orders. A market exit fills wherever the market is and carries no
    * level error, so scoring it here would invent a cost that does not exist.
@@ -110,6 +113,8 @@ export interface AsymmetryResult {
   readonly flips: number;
   /** Null when nothing could be assessed, which is the `n/a` signal. */
   readonly meanAccountError: number | null;
+  /** The total per level exit, in pips and ticks — the scale a stop is actually chosen in. */
+  readonly perFill: PerFillFigures;
   readonly explanation: string;
 }
 
@@ -185,6 +190,11 @@ export function checkBidAskAsymmetry(params: AsymmetryParams): AsymmetryResult {
     totalAccountError: totalAccountError as AccountMoney,
     flips,
     meanAccountError: rows.length === 0 ? null : totalAccountError / rows.length,
+    perFill: perFillFigures(
+      rows.map((r) => r.priceError),
+      totalAccountError,
+      params.scale,
+    ),
     explanation: explain(basis, rows.length),
   };
 }

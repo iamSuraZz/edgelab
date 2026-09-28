@@ -1,5 +1,7 @@
 import { accountMoney, type AccountMoney, type Lots, type Price } from '@edgelab/shared';
 
+import { perFillFigures, type PerFillFigures } from './per-fill';
+
 /**
  * Fill audit — do the fills the engine reported actually correspond to the bars they happened on?
  *
@@ -78,6 +80,8 @@ export interface FillAuditResult {
    */
   readonly netPnlIfPenetrationRequired: AccountMoney;
   readonly netPnlReported: AccountMoney;
+  /** The penetration adjustment per touch fill, in pips and ticks. */
+  readonly perFill: PerFillFigures;
 }
 
 export interface AuditFillsParams {
@@ -85,6 +89,8 @@ export interface AuditFillsParams {
   /** Indexed as `entryBar`/`exitBar` index them. */
   readonly bars: readonly AuditBar[];
   readonly mintick: number;
+  /** One pip, for the per-fill figures. Defaults to ten ticks when omitted. */
+  readonly pipSize?: number;
   /**
    * Account-currency value of ONE TICK for ONE unit of `AuditTrade.qty`.
    *
@@ -194,5 +200,12 @@ export function auditFills(params: AuditFillsParams): FillAuditResult {
     touches,
     netPnlReported: accountMoney(netPnlReported),
     netPnlIfPenetrationRequired: accountMoney(netPnlReported + penetrationAdjustment),
+    // One tick per touch fill by construction, so the pip figure is a constant for the instrument —
+    // reported anyway so every execution-bias total is readable in the same units.
+    perFill: perFillFigures(
+      touches.map(() => params.mintick),
+      Math.abs(penetrationAdjustment),
+      { mintick: params.mintick, pipSize: params.pipSize ?? params.mintick * 10 },
+    ),
   };
 }

@@ -35,10 +35,13 @@ function trade(over: Partial<LevelExitTrade> = {}): LevelExitTrade {
   };
 }
 
+const SCALE = { mintick: 0.00001, pipSize: 0.0001 };
+
 const base = {
   bars: BARS,
   spreadAt: () => SPREAD,
   valuePerPricePerLot: VALUE_PER_PRICE_PER_LOT,
+  scale: SCALE,
   isLevelExit: () => true,
 };
 
@@ -174,6 +177,7 @@ describe('checkBidAskAsymmetry — n/a', () => {
       bars: BARS,
       spreadAt: () => SPREAD,
       valuePerPricePerLot: VALUE_PER_PRICE_PER_LOT,
+      scale: SCALE,
       basis: 'mid',
       trades: [trade()],
     });

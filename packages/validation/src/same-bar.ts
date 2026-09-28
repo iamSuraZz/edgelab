@@ -1,5 +1,15 @@
 import { lotsToUnits, type Lots, type Units } from '@edgelab/shared';
 
+import {
+  breakdownByGap,
+  classifyGap,
+  perFillFigures,
+  type GapBreakdownRow,
+  type GapType,
+  type InstrumentScale,
+  type PerFillFigures,
+} from './per-fill';
+
 /**
  * Same-bar execution bias, estimated analytically rather than re-run.
  *
@@ -63,6 +73,8 @@ export interface FillBiasRow {
   readonly priceGap: number;
   /** `priceGap` as money in the account currency, positive when our fill cost us. */
   readonly accountCost: number;
+  /** What sat between the signal bar and the fill bar. Null when bar times were not supplied. */
+  readonly gap: GapType | null;
 }
 
 export interface SameBarBiasEstimate {
@@ -75,6 +87,15 @@ export interface SameBarBiasEstimate {
   readonly unassessable: number;
   /** Mean cost per assessed fill, or null when nothing could be assessed. */
   readonly meanAccountCost: number | null;
+  /**
+   * The same total expressed per fill, in pips and ticks.
+   *
+   * A total alone hides both unit errors and implausible magnitudes; a per-fill figure in pips is
+   * checkable against what the instrument actually does on that timeframe.
+   */
+  readonly perFill: PerFillFigures;
+  /** Per-fill figures split by gap type. Empty when bar times were not supplied. */
+  readonly byGap: readonly GapBreakdownRow[];
   /** Always true: this is an estimate under fixed decisions, never a re-run. */
   readonly isEstimate: true;
   /** The sentence the report shows verbatim. */
@@ -83,12 +104,25 @@ export interface SameBarBiasEstimate {
 
 export interface SameBarBiasParams {
   readonly fills: readonly MarketFill[];
-  /** The run's bars, indexed as `fillBar` indexes them. */
-  readonly bars: readonly { readonly open: number; readonly close: number }[];
+  /**
+   * The run's bars, indexed as `fillBar` indexes them.
+   *
+   * `time` is optional only so existing callers keep compiling; without it the gap breakdown is
+   * empty and the report says so rather than guessing.
+   */
+  readonly bars: readonly {
+    readonly open: number;
+    readonly close: number;
+    readonly time?: number;
+  }[];
   /** Quote-currency value of one price unit for one contract. */
   readonly pointValue: number;
   /** Quote -> account rate. Pass `() => 1` when they are the same currency. */
   readonly rateAt: (fillBar: number) => number;
+  /** Tick and pip size, for the per-fill figures. */
+  readonly scale: InstrumentScale;
+  /** Chart timeframe in ms, so an ordinary bar step can be told from a session or weekend gap. */
+  readonly timeframeMs?: number;
 }
 
 export const SAME_BAR_WARNING =
@@ -113,6 +147,12 @@ export function estimateSameBarBias(params: SameBarBiasParams): SameBarBiasEstim
     const priceGap =
       fill.direction === 'buy' ? fill.fillPrice - sameBarPrice : sameBarPrice - fill.fillPrice;
 
+    const fillBarTime = params.bars[fill.fillBar]?.time;
+    const gap =
+      params.timeframeMs !== undefined && signalBar.time !== undefined && fillBarTime !== undefined
+        ? classifyGap(signalBar.time, fillBarTime, params.timeframeMs)
+        : null;
+
     rows.push({
       label: fill.label,
       fillBar: fill.fillBar,
@@ -120,10 +160,13 @@ export function estimateSameBarBias(params: SameBarBiasParams): SameBarBiasEstim
       sameBarPrice,
       priceGap,
       accountCost: priceGap * Math.abs(fill.qty) * params.pointValue * params.rateAt(fill.fillBar),
+      gap,
     });
   }
 
   const totalAccountCost = rows.reduce((sum, r) => sum + r.accountCost, 0);
+
+  const timed = rows.filter((r) => r.gap !== null);
 
   return {
     rows,
@@ -131,6 +174,15 @@ export function estimateSameBarBias(params: SameBarBiasParams): SameBarBiasEstim
     assessed: rows.length,
     unassessable,
     meanAccountCost: rows.length === 0 ? null : totalAccountCost / rows.length,
+    perFill: perFillFigures(
+      rows.map((r) => r.priceGap),
+      totalAccountCost,
+      params.scale,
+    ),
+    byGap: breakdownByGap(
+      timed.map((r) => ({ gap: r.gap as GapType, priceGap: r.priceGap, money: r.accountCost })),
+      params.scale,
+    ),
     isEstimate: true,
     warning: SAME_BAR_WARNING,
   };

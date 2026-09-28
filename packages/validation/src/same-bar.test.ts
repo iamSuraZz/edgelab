@@ -12,6 +12,9 @@ import { estimateSameBarBias, marketFillsFromTrades, type MarketFill } from './s
  */
 
 /** Bars where close and next open differ by a known, deliberate gap. */
+/** 5-digit EURUSD: a pip is ten ticks. */
+const SCALE = { mintick: 0.00001, pipSize: 0.0001 };
+
 const BARS = [
   { open: 100, close: 101 }, // bar 0 — signal bar for a fill on bar 1
   { open: 102, close: 103 }, // bar 1 — gapped UP 1.0 from bar 0's close
@@ -26,7 +29,13 @@ describe('estimateSameBarBias', () => {
       { label: 't1 entry', fillBar: 1, fillPrice: 102, qty: units(2), direction: 'buy' },
     ];
 
-    const result = estimateSameBarBias({ fills, bars: BARS, pointValue: 1, rateAt: () => 1 });
+    const result = estimateSameBarBias({
+      fills,
+      bars: BARS,
+      pointValue: 1,
+      rateAt: () => 1,
+      scale: SCALE,
+    });
 
     expect(result.rows).toHaveLength(1);
     expect(result.rows[0]!.sameBarPrice).toBe(101);
@@ -41,7 +50,13 @@ describe('estimateSameBarBias', () => {
       { label: 't1 entry', fillBar: 2, fillPrice: 102, qty: units(1), direction: 'buy' },
     ];
 
-    const result = estimateSameBarBias({ fills, bars: BARS, pointValue: 1, rateAt: () => 1 });
+    const result = estimateSameBarBias({
+      fills,
+      bars: BARS,
+      pointValue: 1,
+      rateAt: () => 1,
+      scale: SCALE,
+    });
 
     expect(result.rows[0]!.priceGap).toBe(-1);
     expect(result.totalAccountCost).toBe(-1);
@@ -54,12 +69,14 @@ describe('estimateSameBarBias', () => {
       bars: BARS,
       pointValue: 1,
       rateAt: () => 1,
+      scale: SCALE,
     });
     const buy = estimateSameBarBias({
       fills: [{ label: 't1 entry', fillBar: 1, fillPrice: 102, qty: units(1), direction: 'buy' }],
       bars: BARS,
       pointValue: 1,
       rateAt: () => 1,
+      scale: SCALE,
     });
 
     expect(sell.totalAccountCost).toBe(-buy.totalAccountCost);
@@ -71,6 +88,7 @@ describe('estimateSameBarBias', () => {
       bars: BARS,
       pointValue: 1,
       rateAt: () => 1,
+      scale: SCALE,
     });
 
     expect(result.totalAccountCost).toBe(0);
@@ -84,6 +102,7 @@ describe('estimateSameBarBias', () => {
       bars: BARS,
       pointValue: 100_000,
       rateAt: () => 1 / 150,
+      scale: SCALE,
     });
 
     expect(result.rows[0]!.accountCost).toBeCloseTo((1 * 2 * 100_000) / 150, 6);
@@ -97,6 +116,7 @@ describe('estimateSameBarBias', () => {
       bars: BARS,
       pointValue: 1,
       rateAt: () => 1,
+      scale: SCALE,
     });
 
     expect(result.assessed).toBe(0);
@@ -115,6 +135,7 @@ describe('estimateSameBarBias', () => {
       bars: BARS,
       pointValue: 1,
       rateAt: () => 1,
+      scale: SCALE,
     });
 
     expect(result.assessed).toBe(2);
@@ -123,7 +144,13 @@ describe('estimateSameBarBias', () => {
   });
 
   it('always says it is an estimate', () => {
-    const result = estimateSameBarBias({ fills: [], bars: BARS, pointValue: 1, rateAt: () => 1 });
+    const result = estimateSameBarBias({
+      fills: [],
+      bars: BARS,
+      pointValue: 1,
+      rateAt: () => 1,
+      scale: SCALE,
+    });
 
     expect(result.isEstimate).toBe(true);
     expect(result.warning).toMatch(/Estimated, not re-run/);
@@ -220,7 +247,13 @@ describe('marketFillsFromTrades — lots to units', () => {
     ]);
 
     // Entry gapped 1.0 above bar 0's close on one lot of 100,000 at pointValue 1 = 100,000.
-    const result = estimateSameBarBias({ fills, bars: BARS, pointValue: 1, rateAt: () => 1 });
+    const result = estimateSameBarBias({
+      fills,
+      bars: BARS,
+      pointValue: 1,
+      rateAt: () => 1,
+      scale: SCALE,
+    });
 
     expect(result.rows[0]!.accountCost).toBe(100_000);
   });

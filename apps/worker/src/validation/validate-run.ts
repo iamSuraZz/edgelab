@@ -8,6 +8,7 @@ import {
   checkCausality,
   auditFills,
   checkBidAskAsymmetry,
+  describePerFill,
   levelExitIdsFromSource,
   type AsymmetryResult,
   cutoffsFor,
@@ -330,6 +331,7 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
     })),
     bars: full.engineResult.bars,
     mintick: symbolRow.mintick,
+    pipSize: symbolRow.pipSize,
     // qty on a costed trade is in LOTS, so the per-tick value must be per lot: one tick moved on
     // one lot. Passing a bare mintick here reported the penetration cost as 0.00.
     valuePerTickPerLot: symbolRow.mintick * symbolRow.contractSize * symbolRow.pointValue,
@@ -340,6 +342,10 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
   // Which exits rested in the book, read from the SOURCE rather than guessed from prices: a
   // reversal closes with the opposing entry's id, a bracket with its own.
   const levelExitIds = levelExitIdsFromSource(run.pineSource);
+  const isLevelExit = (seq: number): boolean => {
+    const reason = full.trades[seq - 1]?.exitReason;
+    return reason != null && levelExitIds.has(reason);
+  };
   const costConfig = CostConfigSchema.parse(run.costs ?? DEFAULT_COSTS);
 
   const asymmetry = checkBidAskAsymmetry({
@@ -357,10 +363,8 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
     spreadAt: (barIndex) => spreadPriceAt(full.engineResult.bars[barIndex], symbolRow, costConfig),
     // One price unit on one LOT, in the account currency.
     valuePerPricePerLot: symbolRow.contractSize * symbolRow.pointValue,
-    isLevelExit: (seq) => {
-      const reason = full.trades[seq - 1]?.exitReason;
-      return reason != null && levelExitIds.has(reason);
-    },
+    scale: { mintick: symbolRow.mintick, pipSize: symbolRow.pipSize },
+    isLevelExit,
   });
 
   /* --------------------------------------------------------- the checks */
@@ -398,10 +402,18 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
         exitBar: t.exitBar,
         exitPrice: t.exitPrice,
       })),
+      // ONLY market fills are comparable against the previous bar's close. A bracket exit fills at
+      // its own LEVEL somewhere inside the bar, so scoring it here measures the distance from the
+      // previous close to the stop or target — which on a losing run is systematically adverse and
+      // has nothing to do with same-bar execution. Leaving this out inflated the estimate from
+      // 0.09 to 1.26 pips per fill, and the pips figure is what made it visible.
+      (seq, leg) => leg === 'entry' || !isLevelExit(seq),
     ),
     bars: full.engineResult.bars,
     pointValue: symbolRow.pointValue,
     rateAt: () => 1,
+    scale: { mintick: symbolRow.mintick, pipSize: symbolRow.pipSize },
+    timeframeMs: tfMs,
   });
 
   const verdict = overallVerdict(results);
@@ -951,7 +963,8 @@ function asymmetryResult(a: AsymmetryResult, source: string): CheckResult {
       a.totalAccountError > 0
         ? `${String(a.assessed)} level exits are flattered by ${a.totalAccountError.toFixed(2)} in ` +
           `total (${(a.meanAccountError ?? 0).toFixed(2)} per exit): every stop and target fills on ` +
-          `the far side of the spread. No outcome flips. ${a.explanation}`
+          `the far side of the spread — ${describePerFill(a.perFill)}. No outcome flips. ` +
+          `${a.explanation}`
         : `${String(a.assessed)} level exits carry no bid/ask error. ${a.explanation}`,
     evidence,
   };

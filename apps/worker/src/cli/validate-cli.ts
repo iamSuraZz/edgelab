@@ -1,4 +1,5 @@
 import { createDbClient } from '@edgelab/db';
+import { describeGapBreakdown, describePerFill } from '@edgelab/validation';
 import { loadDotEnvFile, loadEnv } from '@edgelab/shared/config';
 
 import { validateRun } from '../validation/validate-run';
@@ -58,6 +59,11 @@ async function main(): Promise<void> {
         `\n  same-bar execution estimate: ${s.totalAccountCost.toFixed(2)} over ` +
           `${String(s.assessed)} fills (positive = our fills were worse)\n`,
       );
+      // Per fill, in pips: a total is unfalsifiable at a glance, a pip figure is not.
+      process.stdout.write(`  ${describePerFill(s.perFill)}\n`);
+      if (s.byGap.length > 0) {
+        process.stdout.write(`  by gap — ${describeGapBreakdown(s.byGap)}\n`);
+      }
       process.stdout.write(`  ${s.warning}\n`);
     }
 
