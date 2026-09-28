@@ -95,7 +95,7 @@ pnpm run import:file mt5 EURUSD <abs.csv> 120        # 120 = broker server UTC o
 
 ## Current status — NOT v1.0
 
-Green: `build` 9/9, `typecheck` 16/16, `lint` clean, **801 tests** (`pnpm test`).
+Green: `build` 9/9, `typecheck` 16/16, `lint` clean, **821 tests** (`pnpm test`).
 CI runs all five checks on every push — see `.github/workflows/ci.yml`.
 
 **Verified against the real docker stack:**
@@ -193,6 +193,13 @@ the price LEVELS, and that is where the asymmetry check finds it.**
 > minutes than the bid feed over the window they share. **Still open: this feed is MID, not bid**
 > (+0.65x spread above the bid feed), and the cost overlay assumes bid — so its cost attribution is
 > wrong on this feed even though the total is close.
+
+**Stop and target levels now come from the ORDER LOG, not from clustering exit prices (A23).**
+Clustering only ever worked for a fixed bracket; the new `atr-bracket` fixture has 183 distinct
+adverse exit distances across 296 trades, so both execution checks would have reported `n/a` on it.
+Reading `strategy.exit` arguments — already resolved per bar, so an ATR expression arrives as a
+number — both now produce results. Trailing stops are `n/a` explicitly. The fixed-bracket run
+reproduces its clustered baseline exactly, which is what proves the rewrite.
 
 **The M1 intrabar replay is done and it found real flips on BOTH feeds (A22).** It walks every
 resting-order trade minute by minute with sells on the bid and buys on the ask, and catches the error
