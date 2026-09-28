@@ -1912,3 +1912,40 @@ engine runs cannot live in a suite that answers in seconds.
 What remains for slice D is step 2 (`POST /backtests/:id/validate` with SSE progress) and step 3 (the
 "Integrity & Overfitting" tab) — after which the DONE WHEN, which requires the whole thing exercised
 in a browser, can be met for the first time.
+
+## A48 · Bootstrap, and reading both tails of the reshuffle
+
+Two gaps in A47, both from spec 06.
+
+**The bootstrap resamples WITH replacement**, under the same A43 quantity rule. Unlike the reshuffle
+it genuinely moves the final return, and that spread is the point: it answers the question permuting
+cannot, which is whether the profit could plausibly be luck. Reported as the 5th/50th/95th percentile
+final return and the share of resamples that lose money. The invariance test stays on the RESHUFFLE
+only — it is a property of permutation, not of resampling, and asserting it on the bootstrap would
+assert the check is broken.
+
+On `rsi-mean-reversion`, EURUSD H1 2022, it changed the verdict from `pass` to `warn`:
+
+    bootstrap final return  -8.2% / 15.1% / 36.3%  (5th / 50th / 95th)
+    15.4% of resamples lose money
+
+The run itself returned about the median, so its ordering was unremarkable — but roughly one trade
+set in six drawn from the same distribution would have lost money, which no other check in the suite
+discloses.
+
+**Thresholds as one-sided confidence statements about the profit**: above 5% losing is not
+significant at the conventional level and warns; above 33% is a third of equally plausible trade sets
+losing and fails. My first cut put the failure at 50%, which is unreachable for a profitable run —
+the bootstrap centres on the observed mean, so half the resamples can only lose if the run itself
+made nothing, and the OOS split already catches that. A threshold that can only fire on a losing run
+adds nothing.
+
+**Both tails of the reshuffle are read, for opposite reasons.** Below the 5th percentile the
+ordering was lucky and the reported drawdown understates risk. Above the 95th the realised sequence
+was worse than permutation generally produces, which means the losses CLUSTERED — and random
+permutation destroys exactly that serial dependence, so the distribution understates the risk there
+too, by modelling a process the strategy does not have. Both warn, and both say the same practical
+thing.
+
+The 95th-percentile drawdown is now named explicitly as the figure to size around: the backtest
+showed one ordering, and sizing from its curve is sizing from that draw.

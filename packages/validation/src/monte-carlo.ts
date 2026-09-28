@@ -13,10 +13,19 @@
  * shallower drawdown than anything reachable. Shuffling percentages under fixed sizing makes the
  * opposite error, manufacturing compounding the strategy never had.
  *
- * THE FINAL RESULT IS INVARIANT, AND THAT IS NOT A BUG. Summing dollars and multiplying growth
- * factors are both commutative, so every ordering ends at the same place. Only the PATH moves. This
- * is worth stating plainly because a Monte Carlo that reports a spread of final returns has almost
- * certainly shuffled the wrong quantity — a distribution of outcomes is the symptom A43 prevents.
+ * TWO RESAMPLINGS, ANSWERING DIFFERENT QUESTIONS.
+ *
+ *   - **Reshuffle** permutes the trades that happened. The final result is INVARIANT under it, and
+ *     that is not a bug: summing dollars and multiplying growth factors are both commutative, so
+ *     every ordering ends at the same place and only the PATH moves. A reshuffle that reports a
+ *     spread of final returns has shuffled the wrong quantity — the symptom A43 prevents. What it
+ *     measures is drawdown: how bad the ride could have been with the same trades in another order.
+ *   - **Bootstrap** resamples WITH REPLACEMENT, so each draw is a different trade set from the same
+ *     distribution. Here a spread of final returns is the whole point, because it answers the
+ *     question the reshuffle cannot: could this profit plausibly be luck? A strategy whose bootstrap
+ *     loses money a third of the time has an edge indistinguishable from chance at this sample size.
+ *
+ * The A43 rule governs both: the quantity resampled is whichever one sizing holds stationary.
  *
  * Pure and deterministic: the shuffle is seeded, so a report is reproducible.
  */
@@ -44,6 +53,16 @@ export interface Percentiles {
   readonly worst: number;
 }
 
+export interface BootstrapResult {
+  readonly iterations: number;
+  /** Final return across resamples. A spread here is the signal, not a defect. */
+  readonly finalReturnPct: Percentiles;
+  /** Share of resampled trade sets that lose money. */
+  readonly lossSharePct: number;
+  /** What the actual trade set returned, for comparison against the distribution. */
+  readonly observedFinalReturnPct: number;
+}
+
 export interface MonteCarloResult {
   readonly iterations: number;
   readonly sizingMode: SizingMode;
@@ -64,8 +83,18 @@ export interface MonteCarloResult {
   readonly observedPercentile: number | null;
   /** Share of orderings whose equity ever reached zero. */
   readonly riskOfRuinPct: number | null;
-  /** Invariant across orderings, and reported to make that visible. */
+  /** Invariant across ORDERINGS, and reported to make that visible. */
   readonly finalReturnPct: number | null;
+  /**
+   * The drawdown to size positions around.
+   *
+   * The 95th percentile rather than the observed figure: the backtest showed one ordering, and
+   * sizing from it is sizing from that draw. This is the number that answers "how bad could the
+   * ride get with these same trades".
+   */
+  readonly planningDrawdownPct: number | null;
+  /** Resampling with replacement. Null when the check could not run. */
+  readonly bootstrap: BootstrapResult | null;
   readonly verdict: 'pass' | 'warn' | 'fail' | 'n/a';
   readonly explanation: string;
   readonly inconclusiveReason: string | null;
@@ -81,6 +110,10 @@ export interface MonteCarloParams {
 }
 
 const DEFAULT_ITERATIONS = 1000;
+
+/** See `judge`: one-sided confidence statements about the profit. */
+const BOOTSTRAP_WARN_PCT = 5;
+const BOOTSTRAP_FAIL_PCT = 33;
 const DEFAULT_MIN_TRADES = 20;
 
 export function runMonteCarlo(params: MonteCarloParams): MonteCarloResult {
@@ -96,6 +129,8 @@ export function runMonteCarlo(params: MonteCarloParams): MonteCarloResult {
     observedPercentile: null,
     riskOfRuinPct: null,
     finalReturnPct: null,
+    planningDrawdownPct: null,
+    bootstrap: null,
   };
 
   if (params.sizingMode === 'unknown') {
@@ -148,21 +183,46 @@ export function runMonteCarlo(params: MonteCarloParams): MonteCarloResult {
 
   const sorted = [...drawdowns].sort((a, b) => a - b);
   const below = sorted.filter((d) => d < observed.maxDrawdownPct).length;
+  const ddPercentiles = percentilesOf(sorted);
+  const observedPercentile = below / sorted.length;
+
+  // WITH replacement, so each draw is a different trade set from the same distribution. Unlike the
+  // reshuffle this genuinely moves the final return, which is what lets it say whether the profit
+  // could be luck.
+  const bootstrapReturns: number[] = [];
+  const draw = [...values];
+  for (let i = 0; i < iterations; i += 1) {
+    for (let k = 0; k < draw.length; k += 1) {
+      draw[k] = values[Math.floor(rng() * values.length)]!;
+    }
+    bootstrapReturns.push(walk(draw, quantity, params.initialCapital).finalReturnPct);
+  }
+
+  const bootstrapSorted = [...bootstrapReturns].sort((a, b) => a - b);
+  const bootstrap: BootstrapResult = {
+    iterations,
+    finalReturnPct: percentilesOf(bootstrapSorted),
+    lossSharePct: (bootstrapSorted.filter((r) => r <= 0).length / bootstrapSorted.length) * 100,
+    observedFinalReturnPct: observed.finalReturnPct,
+  };
 
   return {
     ...base,
     quantity,
     trades: usable.length,
-    maxDrawdownPct: percentilesOf(sorted),
+    maxDrawdownPct: ddPercentiles,
     observedMaxDrawdownPct: observed.maxDrawdownPct,
-    observedPercentile: below / sorted.length,
+    observedPercentile,
     riskOfRuinPct: (ruined / iterations) * 100,
     finalReturnPct: observed.finalReturnPct,
+    planningDrawdownPct: ddPercentiles.p95,
+    bootstrap,
     ...judge(
       observed.maxDrawdownPct,
-      below / sorted.length,
-      percentilesOf(sorted),
+      observedPercentile,
+      ddPercentiles,
       ruined / iterations,
+      bootstrap,
     ),
   };
 }
@@ -174,10 +234,10 @@ interface Path {
 }
 
 /**
- * Walk one ordering, tracking the worst peak-to-trough fall.
+ * Walk one sequence, tracking the worst peak-to-trough fall.
  *
- * Drawdown is measured against the running PEAK rather than the starting capital, which is what
- * makes it comparable between an ordering that lost early and one that gave back a gain.
+ * Drawdown is measured against the running PEAK rather than starting capital, which is what makes it
+ * comparable between a sequence that lost early and one that gave back a gain.
  */
 function walk(values: readonly number[], quantity: string, initialCapital: number): Path {
   let equity = initialCapital;
@@ -206,37 +266,94 @@ function walk(values: readonly number[], quantity: string, initialCapital: numbe
   };
 }
 
+/**
+ * Both tails of the reshuffle matter, for opposite reasons.
+ *
+ * BELOW the 5th percentile the backtest's ordering was LUCKY: almost every other arrangement of the
+ * same trades drew down further, so the reported drawdown understates the risk.
+ *
+ * ABOVE the 95th the realised sequence was worse than reshuffling generally produces, which means
+ * the losses CLUSTERED. Random permutation destroys exactly that serial dependence, so the
+ * distribution understates the risk here too — by modelling a process the strategy does not have.
+ *
+ * Both are warnings, and both say the same practical thing: do not size from the observed curve.
+ */
 function judge(
   observedDd: number,
   percentile: number,
   dist: Percentiles,
   ruinRate: number,
+  bootstrap: BootstrapResult,
 ): Pick<MonteCarloResult, 'verdict' | 'explanation' | 'inconclusiveReason'> {
   const shape =
-    `Reshuffling the same trades gives a median drawdown of ${dist.p50.toFixed(1)}% and a 95th ` +
-    `percentile of ${dist.p95.toFixed(1)}%, against the ${observedDd.toFixed(1)}% this run actually ` +
-    `showed. Final return is identical in every ordering — only the path moves.`;
+    `Reshuffling gives a median drawdown of ${dist.p50.toFixed(1)}% and a 95th percentile of ` +
+    `${dist.p95.toFixed(1)}%, against the ${observedDd.toFixed(1)}% this run showed — size around ` +
+    `${dist.p95.toFixed(1)}%, not ${observedDd.toFixed(1)}%. Final return is identical in every ` +
+    `ordering; only the path moves. Bootstrapping with replacement gives a final return of ` +
+    `${bootstrap.finalReturnPct.p5.toFixed(1)}% / ${bootstrap.finalReturnPct.p50.toFixed(1)}% / ` +
+    `${bootstrap.finalReturnPct.p95.toFixed(1)}% at the 5th/50th/95th percentile, with ` +
+    `${bootstrap.lossSharePct.toFixed(1)}% of resamples losing money.`;
 
   if (ruinRate > 0) {
     return {
       verdict: 'fail',
       explanation:
-        `${(ruinRate * 100).toFixed(1)}% of orderings wipe the account out entirely. The same trades ` +
-        `in a different sequence end at zero, so this result depends on the order they happened to ` +
-        `arrive in. ${shape}`,
+        `${(ruinRate * 100).toFixed(1)}% of orderings wipe the account out entirely. The same ` +
+        `trades in a different sequence end at zero, so this result depends on the order they ` +
+        `happened to arrive in. ${shape}`,
       inconclusiveReason: null,
     };
   }
 
-  // A run sitting in the bottom quarter of the drawdown distribution had a favourable ordering, and
-  // sizing chosen from its curve would be sized from that luck rather than from the strategy.
-  if (percentile <= 0.25) {
+  // Thresholds as one-sided confidence statements about the profit, not about the account:
+  //
+  //   >5%  losing  — the result is not significant at the conventional level -> warn
+  //   >33% losing  — a third of equally plausible trade sets lose money -> fail
+  //
+  // 50% was the first cut and it is unreachable for a profitable run: the bootstrap centres on the
+  // observed mean, so half the resamples can only lose if the run itself made nothing — which the
+  // OOS split and the cost stress already catch. A threshold that can only fire on a losing run
+  // tells you nothing you did not have.
+  if (bootstrap.lossSharePct >= BOOTSTRAP_FAIL_PCT) {
+    return {
+      verdict: 'fail',
+      explanation:
+        `${bootstrap.lossSharePct.toFixed(1)}% of bootstrap resamples lose money — a third or more ` +
+        `of equally plausible trade sets drawn from the same distribution are unprofitable. The ` +
+        `profit this run reports is not distinguishable from luck at this sample size. ${shape}`,
+      inconclusiveReason: null,
+    };
+  }
+
+  if (percentile < 0.05) {
     return {
       verdict: 'warn',
       explanation:
-        `This run's drawdown sits at the ${(percentile * 100).toFixed(0)}th percentile of orderings ` +
-        `— three quarters of them were worse. The curve you are looking at is a favourable draw, ` +
-        `and position sizing taken from it would be sized from that luck. ${shape}`,
+        `This run's drawdown sits at the ${(percentile * 100).toFixed(0)}th percentile of ` +
+        `orderings — nearly every other arrangement of the same trades was worse. The curve is a ` +
+        `favourable draw and its drawdown understates the risk. ${shape}`,
+      inconclusiveReason: null,
+    };
+  }
+
+  if (percentile > 0.95) {
+    return {
+      verdict: 'warn',
+      explanation:
+        `This run's drawdown sits at the ${(percentile * 100).toFixed(0)}th percentile of ` +
+        `orderings — worse than reshuffling generally produces, which means the losses CLUSTERED. ` +
+        `Random permutation destroys that serial dependence, so this distribution understates the ` +
+        `risk rather than bounding it. ${shape}`,
+      inconclusiveReason: null,
+    };
+  }
+
+  if (bootstrap.lossSharePct >= BOOTSTRAP_WARN_PCT) {
+    return {
+      verdict: 'warn',
+      explanation:
+        `${bootstrap.lossSharePct.toFixed(1)}% of bootstrap resamples lose money, so a trade set ` +
+        `drawn from the same distribution would not always have been profitable. ${shape}`,
       inconclusiveReason: null,
     };
   }
