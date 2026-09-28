@@ -95,7 +95,7 @@ pnpm run import:file mt5 EURUSD <abs.csv> 120        # 120 = broker server UTC o
 
 ## Current status — NOT v1.0
 
-Green: `build` 9/9, `typecheck` 16/16, `lint` clean, **945 tests** (`pnpm test`).
+Green: `build` 9/9, `typecheck` 16/16, `lint` clean, **951 tests** (`pnpm test`).
 CI runs all five checks on every push — see `.github/workflows/ci.yml`.
 
 **Verified against the real docker stack:**
