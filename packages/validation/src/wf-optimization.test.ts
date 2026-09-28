@@ -173,17 +173,36 @@ describe('pickWinner', () => {
 });
 
 describe('analyseWfOptimization', () => {
-  const fold = (winner: Record<string, number>, isPct: number, oosPct: number) => ({
-    winner,
-    inSample: seg({ returnPct: isPct, netProfit: isPct * 100 }),
-    outOfSample: seg({ returnPct: oosPct, netProfit: oosPct * 100, toMs: 1000 + isPct }),
-  });
+  const DAY = 24 * 60 * 60_000;
+  const IS_DAYS = 90;
+  const OOS_DAYS = 30;
+
+  /**
+   * Folds are expressed by the WFE they should produce, not by raw returns.
+   *
+   * The in-sample window is three times the out-of-sample one, so a raw-return ratio would score a
+   * perfectly generalising procedure at 1/3. Stating the intended WFE and deriving the out-of-sample
+   * return from it keeps these tests about the check rather than about the fold layout.
+   */
+  const fold = (winner: Record<string, number>, isPct: number, wfe: number) => {
+    const oosPct = (wfe * isPct * OOS_DAYS) / IS_DAYS;
+    return {
+      winner,
+      inSample: seg({ fromMs: 0, toMs: IS_DAYS * DAY, returnPct: isPct, netProfit: isPct * 100 }),
+      outOfSample: seg({
+        fromMs: IS_DAYS * DAY,
+        toMs: (IS_DAYS + OOS_DAYS) * DAY,
+        returnPct: oosPct,
+        netProfit: oosPct * 100,
+      }),
+    };
+  };
 
   const stable = [
-    fold({ fast: 10, slow: 40 }, 10, 8),
-    fold({ fast: 10, slow: 40 }, 10, 7),
-    fold({ fast: 15, slow: 40 }, 10, 9),
-    fold({ fast: 10, slow: 40 }, 10, 8),
+    fold({ fast: 10, slow: 40 }, 10, 0.8),
+    fold({ fast: 10, slow: 40 }, 10, 0.7),
+    fold({ fast: 15, slow: 40 }, 10, 0.9),
+    fold({ fast: 10, slow: 40 }, 10, 0.8),
   ];
 
   it('passes when the procedure generalises and the optimum stays put', () => {
@@ -202,10 +221,10 @@ describe('analyseWfOptimization', () => {
 
   it('FAILS a profitable run whose optimum jumps across its range', () => {
     const jumpy = [
-      fold({ fast: 5, slow: 20 }, 10, 8),
-      fold({ fast: 20, slow: 60 }, 10, 9),
-      fold({ fast: 5, slow: 20 }, 10, 7),
-      fold({ fast: 20, slow: 60 }, 10, 8),
+      fold({ fast: 5, slow: 20 }, 10, 0.8),
+      fold({ fast: 20, slow: 60 }, 10, 0.9),
+      fold({ fast: 5, slow: 20 }, 10, 0.7),
+      fold({ fast: 20, slow: 60 }, 10, 0.8),
     ];
     const r = analyseWfOptimization({
       spec: SPEC,
@@ -223,12 +242,12 @@ describe('analyseWfOptimization', () => {
   it('compounds the stitched curve rather than summing it', () => {
     const r = analyseWfOptimization({
       spec: SPEC,
-      folds: [fold({ fast: 10, slow: 40 }, 10, 10), fold({ fast: 10, slow: 40 }, 10, 10)],
+      folds: [fold({ fast: 10, slow: 40 }, 30, 1), fold({ fast: 10, slow: 40 }, 30, 1)],
       combinationsRun: 12,
       gridSize: 12,
     });
 
-    // 1.10 x 1.10 = 1.21, not 20%.
+    // Each fold returns 10% out of sample: 1.10 x 1.10 = 1.21, not 20%.
     expect(r.finalOosReturnPct).toBeCloseTo(21, 6);
   });
 
@@ -246,9 +265,9 @@ describe('analyseWfOptimization', () => {
 
   it('is n/a when the optimiser found no in-sample edge at all', () => {
     const losing = [
-      fold({ fast: 10, slow: 40 }, -5, -3),
-      fold({ fast: 10, slow: 40 }, -4, -2),
-      fold({ fast: 10, slow: 40 }, -6, -1),
+      fold({ fast: 10, slow: 40 }, -5, 0.6),
+      fold({ fast: 10, slow: 40 }, -4, 0.5),
+      fold({ fast: 10, slow: 40 }, -6, 0.2),
     ];
     const r = analyseWfOptimization({
       spec: SPEC,

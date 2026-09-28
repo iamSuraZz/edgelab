@@ -95,7 +95,7 @@ pnpm run import:file mt5 EURUSD <abs.csv> 120        # 120 = broker server UTC o
 
 ## Current status — NOT v1.0
 
-Green: `build` 9/9, `typecheck` 16/16, `lint` clean, **890 tests** (`pnpm test`).
+Green: `build` 9/9, `typecheck` 16/16, `lint` clean, **895 tests** (`pnpm test`).
 CI runs all five checks on every push — see `.github/workflows/ci.yml`.
 
 **Verified against the real docker stack:**
@@ -187,11 +187,17 @@ runs the script's own inputs on rolling folds — a stability check, not walk-fo
 since nothing is selected in sample. Its ratio is called RETENTION; WFE is reserved for the
 optimization. It disagrees with the single OOS split in BOTH directions, which is why both exist:
 
-| fixture            | OOS split | walk-forward                       |
+| fixture            | OOS split | rolling out-of-sample              |
 | ------------------ | --------- | ---------------------------------- |
-| rsi-mean-reversion | **pass**  | **warn** — 1 of 2 folds, WFE -0.07 |
-| supertrend-atr     | **fail**  | **warn** — 3 of 4 folds, WFE 0.45  |
-| bollinger-breakout | **fail**  | **fail** — 1 of 3 folds, WFE -0.12 |
+| rsi-mean-reversion | **pass**  | **warn** — 1 of 2 folds, ret -0.20 |
+| supertrend-atr     | **fail**  | **pass** — 3 of 4 folds, ret 1.36  |
+| bollinger-breakout | **fail**  | **fail** — 1 of 3 folds, ret -0.37 |
+
+**All three ratios normalise by window length (A36).** Comparing raw returns over a 3:1 fold scored an
+unchanged strategy at 0.33, and over the 70/30 split at 0.43 — artefacts of the layout that read as
+decay. Each window's return is now divided by its length in calendar days (simple, not compounded)
+before the ratio, so 1.0 means the same earning rate. This flipped `supertrend-atr`'s rolling verdict
+from warn to **pass**: 0.45 was the layout, 1.36 is the strategy.
 
 A full validation is now **13 checks, ~30 engine runs, 2.6s** on six months of H1.
 
@@ -203,7 +209,7 @@ reports the stitched OOS equity, WFE, parameter drift and a 2-input sensitivity 
 the piscina pool with a measured ETA.
 
 On `rsi-mean-reversion` it **FAILS** where the cheaper checks do not: in-sample returns of 8-15%
-become out-of-sample returns within half a percent of zero (median WFE **0.02**), and the winning
+become out-of-sample returns within half a percent of zero (median WFE **0.06**), and the winning
 `rsiLen` lands on a different value every fold — 20, 24, 6, 14, a mean step of 56% of its range. The
 same fixture PASSES the single OOS split and only WARNS on the rolling check.
 

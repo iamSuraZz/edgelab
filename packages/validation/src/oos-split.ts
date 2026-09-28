@@ -33,12 +33,58 @@ export interface SegmentMetrics {
   readonly expectancy: number | null;
 }
 
+const MS_PER_DAY = 24 * 60 * 60_000;
+
+/**
+ * Return per CALENDAR DAY of the window, in percent.
+ *
+ * Every ratio below compares two windows of different lengths, and comparing their raw returns is
+ * simply wrong: with 3:1 folds a strategy performing identically in both scores 1/3, and with a
+ * 70/30 split it scores 3/7. Those are properties of the layout, not of the strategy, and they made
+ * every retention figure this repo has reported read as decay when nothing had decayed.
+ *
+ * SIMPLE, not compounded. De-compounding a six-week window to a daily rate takes a root, which
+ * amplifies whatever happened in that short window — a fold that returned 12% over 40 days becomes
+ * a 0.28%/day rate under simple division and something far spikier under a geometric one. The
+ * quantity wanted here is "how fast was it earning", and the arithmetic mean is the honest reading
+ * of that over windows this short.
+ *
+ * Null when the window has no length, which is the only way this can be undefined.
+ */
+export function returnPerDay(m: SegmentMetrics): number | null {
+  if (m.returnPct === null) return null;
+  const days = (m.toMs - m.fromMs) / MS_PER_DAY;
+  if (!(days > 0)) return null;
+  return m.returnPct / days;
+}
+
+/**
+ * Out-of-sample daily rate over in-sample daily rate, or null.
+ *
+ * A24's guard is applied to the RAW in-sample return, not the normalised one: the question "was
+ * there an edge to retain" is about the window's actual result, and dividing by its length cannot
+ * change that sign. 1.0 now means the strategy earned at the same rate in both windows.
+ */
+export function retentionRatio(
+  inSample: SegmentMetrics,
+  outOfSample: SegmentMetrics,
+): number | null {
+  if (!((inSample.returnPct ?? 0) > 0)) return null;
+
+  const is = returnPerDay(inSample);
+  const oos = returnPerDay(outOfSample);
+  if (is === null || oos === null || !(is > 0)) return null;
+
+  return oos / is;
+}
+
 export interface OosDegradation {
   /**
-   * Out-of-sample return as a fraction of in-sample return.
+   * Out-of-sample return RATE as a fraction of the in-sample rate, both per calendar day.
    *
-   * 1.0 means it held up; 0.5 means half the edge survived; negative means it reversed. Null when
-   * the in-sample return was not positive, because the ratio would then reward losing more.
+   * 1.0 means it earned at the same speed in both windows; 0.5 means half as fast; negative means it
+   * reversed. Null when the in-sample return was not positive, because the ratio would then reward
+   * losing more.
    */
   readonly returnRatio: number | null;
   readonly profitFactorRatio: number | null;
@@ -152,10 +198,10 @@ export function analyseOosSplit(params: OosSplitParams): OosSplitResult {
       ...base,
       verdict: 'warn',
       explanation:
-        `Out-of-sample return kept ${(kept * 100).toFixed(0)}% of the in-sample return ` +
-        `(${(outOfSample.returnPct ?? 0).toFixed(2)}% against ` +
-        `${(inSample.returnPct ?? 0).toFixed(2)}%). Still profitable, but most of the edge is in ` +
-        'the half the strategy was chosen on.' +
+        `Out-of-sample return kept ${(kept * 100).toFixed(0)}% of the in-sample rate ` +
+        `(${(returnPerDay(outOfSample) ?? 0).toFixed(3)}%/day against ` +
+        `${(returnPerDay(inSample) ?? 0).toFixed(3)}%/day). Still profitable, but most of the edge ` +
+        'is in the half the strategy was chosen on.' +
         pfNote(inSample, outOfSample),
       inconclusiveReason: null,
     };
@@ -166,7 +212,7 @@ export function analyseOosSplit(params: OosSplitParams): OosSplitResult {
     verdict: 'pass',
     explanation:
       `Out-of-sample return kept ${kept === null ? 'its' : `${(kept * 100).toFixed(0)}% of the`} ` +
-      `in-sample return over ${String(outOfSample.trades)} trades.` +
+      `in-sample rate per day over ${String(outOfSample.trades)} trades.` +
       pfNote(inSample, outOfSample),
     inconclusiveReason: null,
   };
@@ -183,7 +229,7 @@ const MIN_STABLE_RETURN_PCT = 1;
 function degrade(is: SegmentMetrics, oos: SegmentMetrics): OosDegradation {
   return {
     returnRatioStable: (is.returnPct ?? 0) >= MIN_STABLE_RETURN_PCT,
-    returnRatio: ratio(is.returnPct, oos.returnPct),
+    returnRatio: retentionRatio(is, oos),
     profitFactorRatio: ratio(is.profitFactor, oos.profitFactor),
     sharpeDelta: delta(is.sharpe, oos.sharpe),
     winRateDelta: delta(is.winRatePct, oos.winRatePct),

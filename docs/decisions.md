@@ -1496,15 +1496,15 @@ Four decisions inside it, each of which could quietly invalidate the result:
 Verified on `rsi-mean-reversion`, EURUSD H1 2022-01-01 .. 2022-07-01, sweeping `rsiLen` 6..24 and
 `oversold` 20..40 for net profit — **FAIL**:
 
-    fold 0: rsiLen=20 oversold=35   IS 13.90% -> OOS -0.31%   WFE -0.02
-    fold 1: rsiLen=24 oversold=30   IS  8.58% -> OOS -0.10%   WFE -0.01
-    fold 2: rsiLen=6  oversold=20   IS 14.73% -> OOS  0.75%   WFE  0.05
-    fold 3: rsiLen=14 oversold=30   IS  7.56% -> OOS  0.47%   WFE  0.06
+    fold 0: rsiLen=20 oversold=35   IS 13.90% -> OOS -0.31%   WFE -0.07
+    fold 1: rsiLen=24 oversold=30   IS  8.58% -> OOS -0.10%   WFE -0.03
+    fold 2: rsiLen=6  oversold=20   IS 14.73% -> OOS  0.75%   WFE  0.15
+    fold 3: rsiLen=14 oversold=30   IS  7.56% -> OOS  0.47%   WFE  0.18
 
     drift: rsiLen 20 -> 24 -> 6 -> 14, mean step 56% of range, 4 distinct values in 4 folds
 
 In-sample returns of 8-15% become out-of-sample returns within half a percent of zero — median WFE
-**0.02**, so essentially none of the fitted edge survives. The optimum lands on a different value
+**0.06** (normalised per day, A36), so essentially none of the fitted edge survives. The optimum lands on a different value
 every fold, and the sensitivity grid shows two separate hot cells with a dead zone between them
 rather than a plateau. The same fixture PASSES the single OOS split and only WARNS on the rolling
 check; the optimization is what says the selection procedure is worthless.
@@ -1516,3 +1516,33 @@ neither the M1 read in front of every candidate nor pool startup. Caching bars p
 byte-identical verdict. The estimate is now fitted to two measured runs at 7 threads (40 runs in
 13.8s, 204 in 24.2s): ~11s pool startup plus ~444ms per run per thread. It now predicts 23.9s against
 27.1s actual, which is the right order of accuracy for a progress estimate.
+
+## A36 · Ratios normalise by window length
+
+WFE, the rolling check's retention and the OOS split's return ratio all compared RAW returns over
+windows of different lengths. With 3:1 folds a strategy performing identically in both windows scored
+0.33; with the 70/30 split it scored 0.43. Those numbers are properties of the fold layout, not of
+the strategy, and every retention figure this repo has reported read as decay when nothing had
+decayed.
+
+All three now divide each window's return by its length in CALENDAR DAYS before taking the ratio, so
+1.0 means "earned at the same rate in both windows".
+
+**Simple division, not compounding.** De-compounding a six-week window into a daily rate takes a
+root, which amplifies whatever happened inside a short window — and the out-of-sample window is
+always the short one here. The quantity wanted is "how fast was it earning", and over windows this
+short the arithmetic reading is the honest one.
+
+A24's guards stay on the RAW in-sample return. "Was there an edge to retain" is a question about the
+window's actual result, and dividing by its length cannot change that sign — so the non-positive
+guard and the near-zero stability floor are unchanged.
+
+**One recorded verdict changes.** `supertrend-atr` on the rolling check read 0.45 and warned; per day
+it is **1.36**, and it now passes — it held in three folds of four and earned FASTER out of sample
+than in. The sharper reading is that it fails a single 70/30 split while passing the rolling check
+outright, which strengthens rather than weakens the argument for keeping both. Two figures move
+without changing their verdict: `rsi-mean-reversion` -0.07 to -0.20, `bollinger-breakout` -0.12 to
+-0.37. The walk-forward optimisation's median WFE moves 0.02 to 0.06 and remains a failure.
+
+The thresholds keep their numeric values — warn below 0.5, and so on — because for the first time
+they now mean what they always claimed to: half the in-sample earning rate.

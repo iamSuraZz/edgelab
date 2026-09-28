@@ -1,4 +1,4 @@
-import type { SegmentMetrics } from './oos-split';
+import { retentionRatio, type SegmentMetrics } from './oos-split';
 
 /**
  * Rolling out-of-sample with FIXED parameters.
@@ -40,7 +40,7 @@ export interface RollingOosFold {
   readonly inSample: SegmentMetrics;
   readonly outOfSample: SegmentMetrics;
   /**
-   * Out-of-sample return over in-sample return, for this fold.
+   * Out-of-sample return RATE over in-sample rate, both per calendar day, for this fold.
    *
    * Deliberately NOT called walk-forward efficiency: WFE measures how well an OPTIMISED parameter
    * set generalises, and nothing is optimised here. This is retention of a fixed set's performance.
@@ -99,11 +99,11 @@ export function analyseRollingOos(params: RollingOosParams): RollingOosResult {
   const folds: RollingOosFold[] = params.folds.map((f, index) => {
     const assessable = f.inSample.trades >= minTrades && f.outOfSample.trades >= minTrades;
     const isReturn = f.inSample.returnPct;
-    const oosReturn = f.outOfSample.returnPct;
 
     const hadEdge = assessable && f.inSample.netProfit > 0;
-    const retention =
-      isReturn === null || oosReturn === null || !(isReturn > 0) ? null : oosReturn / isReturn;
+    // Per calendar DAY on both sides: a 3:1 fold layout makes an unchanged strategy score 1/3 if
+    // the raw returns are divided, which is a property of the layout and not of the strategy.
+    const retention = retentionRatio(f.inSample, f.outOfSample);
 
     return {
       index,
@@ -166,7 +166,7 @@ export function analyseRollingOos(params: RollingOosParams): RollingOosResult {
     `profitable out of sample (${(kept * 100).toFixed(0)}%)` +
     (medianRetention === null
       ? ', with no fold whose in-sample return was large enough for a meaningful efficiency ratio'
-      : `, median out-of-sample retention ${medianRetention.toFixed(2)}`) +
+      : `, median out-of-sample retention (per day) ${medianRetention.toFixed(2)}`) +
     `, over ${String(totalOosTrades)} out-of-sample trades.`;
 
   if (kept < 0.5) {

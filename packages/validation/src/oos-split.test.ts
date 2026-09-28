@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { analyseOosSplit, splitInstant, type SegmentMetrics } from './oos-split';
+import { analyseOosSplit, returnPerDay, splitInstant, type SegmentMetrics } from './oos-split';
 
 /**
  * The trap this check has to avoid is the one A24 named for walk-forward efficiency: a ratio
@@ -174,5 +174,53 @@ describe('analyseOosSplit — unstable ratio', () => {
     });
     expect(r.degradation.returnRatioStable).toBe(true);
     expect(r.explanation).toContain('80%');
+  });
+});
+
+describe('returnPerDay and window-length normalisation', () => {
+  const DAY = 24 * 60 * 60_000;
+
+  it('scores an unchanged strategy at 1.0, not at the window ratio', () => {
+    // 3:1 windows. 12% over 90 days is the same RATE as 4% over 30 days.
+    const r = analyseOosSplit({
+      ...split,
+      inSample: seg({ fromMs: 0, toMs: 90 * DAY, returnPct: 12, netProfit: 1200 }),
+      outOfSample: seg({ fromMs: 90 * DAY, toMs: 120 * DAY, returnPct: 4, netProfit: 400 }),
+    });
+
+    // Dividing raw returns would give 0.33 and read as severe decay.
+    expect(r.degradation.returnRatio).toBeCloseTo(1, 9);
+    expect(r.verdict).toBe('pass');
+  });
+
+  it('still reports genuine decay', () => {
+    const r = analyseOosSplit({
+      ...split,
+      inSample: seg({ fromMs: 0, toMs: 90 * DAY, returnPct: 12, netProfit: 1200 }),
+      outOfSample: seg({ fromMs: 90 * DAY, toMs: 120 * DAY, returnPct: 1, netProfit: 100 }),
+    });
+
+    expect(r.degradation.returnRatio).toBeCloseTo(0.25, 9);
+    expect(r.verdict).toBe('warn');
+  });
+
+  it('divides simply rather than compounding', () => {
+    // 12% over 40 days is 0.3%/day. A geometric de-compounding would give ~0.283%/day, and the
+    // difference grows with the window's return — which is exactly where a short fold is spikiest.
+    expect(returnPerDay(seg({ fromMs: 0, toMs: 40 * DAY, returnPct: 12 }))).toBeCloseTo(0.3, 12);
+  });
+
+  it('keeps A24’s guard on the RAW in-sample return, not the normalised one', () => {
+    const r = analyseOosSplit({
+      ...split,
+      inSample: seg({ fromMs: 0, toMs: 90 * DAY, returnPct: -5, netProfit: -500 }),
+      outOfSample: seg({ fromMs: 90 * DAY, toMs: 120 * DAY, returnPct: -1, netProfit: -100 }),
+    });
+    expect(r.degradation.returnRatio).toBeNull();
+    expect(r.verdict).toBe('n/a');
+  });
+
+  it('is null for a zero-length window rather than infinite', () => {
+    expect(returnPerDay(seg({ fromMs: 5, toMs: 5 }))).toBeNull();
   });
 });

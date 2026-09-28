@@ -1,4 +1,4 @@
-import type { SegmentMetrics } from './oos-split';
+import { retentionRatio, type SegmentMetrics } from './oos-split';
 import {
   objectiveValue,
   valuesOf,
@@ -30,7 +30,8 @@ export interface OptimizedFold {
   readonly inSample: SegmentMetrics | null;
   readonly outOfSample: SegmentMetrics | null;
   /**
-   * Walk-forward efficiency: out-of-sample return over in-sample return, for the WINNING set.
+   * Walk-forward efficiency: out-of-sample return RATE over in-sample rate, per calendar day, for
+   * the WINNING set.
    *
    * This is the real WFE, unlike the rolling check's retention figure — a parameter set was actually
    * selected in sample here, so the ratio measures how much of a FITTED result survived.
@@ -122,14 +123,18 @@ export function analyseWfOptimization(params: WfOptimizationParams): WfOptimizat
 
   const folds: OptimizedFold[] = params.folds.map((f, index) => {
     const isReturn = f.inSample?.returnPct ?? null;
-    const oosReturn = f.outOfSample?.returnPct ?? null;
 
     return {
       index,
       winner: f.winner,
       inSample: f.inSample,
       outOfSample: f.outOfSample,
-      wfe: isReturn === null || oosReturn === null || !(isReturn > 0) ? null : oosReturn / isReturn,
+      // Normalised per calendar day on both sides. An in-sample window three times longer than the
+      // out-of-sample one otherwise caps WFE at 1/3 for a procedure that generalises perfectly.
+      wfe:
+        f.inSample === null || f.outOfSample === null
+          ? null
+          : retentionRatio(f.inSample, f.outOfSample),
       wfeStable: (isReturn ?? 0) >= minStable,
       assessable: f.winner !== null && f.inSample !== null && f.outOfSample !== null,
     };
