@@ -1761,3 +1761,25 @@ Direction is SMA distance as a percentage of price rather than slope, because sl
 price per bar and is not comparable between EURUSD at 1.08 and XAUUSD at 2400. Volatility is a
 trailing rank rather than a z-score: volatility is not normally distributed, and "higher than 90% of
 the last year" is directly actionable where "2.7 sigma" is not.
+
+## A43 · Monte Carlo reshuffles the quantity that sizing makes stationary
+
+Recorded ahead of building it. What gets reshuffled depends on how the strategy sizes:
+
+- **percent-of-equity sizing** — reshuffle per-trade RETURNS, as percentages.
+- **fixed lots or units** — reshuffle dollar P&L.
+
+Shuffling dollar amounts under percent-of-equity sizing is wrong in a way that flatters the result
+and is invisible in the output. Under that sizing a late-period trade is large because the account
+had grown by then; its dollar figure encodes the equity curve that produced it. Reshuffling drops
+that $4,000 win onto a $10,000 starting account as though the strategy could have made it there, and
+the resulting distribution has a fatter right tail and a shallower drawdown than anything reachable.
+The percentage is the quantity sizing holds constant, so it is the one that can be permuted.
+
+The mirror error exists too: reshuffling percentages under FIXED sizing manufactures compounding the
+strategy never had, because a fixed-lot trade's dollar result does not scale with equity. Each sizing
+mode makes exactly one of the two quantities stationary, and that is the one to shuffle.
+
+The sizing mode is knowable rather than guessed — `default_qty_type` is a declared strategy property
+and the order log records the resolved `qty` of every entry — so this is a branch on a fact, not a
+heuristic. When the mode cannot be determined the check reports `n/a` rather than picking one.
