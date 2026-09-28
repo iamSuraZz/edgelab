@@ -1686,3 +1686,31 @@ first version read the latter and silently reported `ok`. Verified end to end:
     stored     range_from 2022-01-01  range_to 2022-05-27  requested_range_to 2022-07-01
     validate   warn Sealed holdout — recorded against the shorter window it actually covered,
                so every figure here matches its stated range
+
+## A41 · Regime D1 bars close at the New York close
+
+The regime classifier builds its own daily series anchored at **17:00 America/New_York, DST-aware** —
+not the Exness-style 00:00 UTC day the rest of the platform uses.
+
+The Exness day splits the FX week into SIX daily bars, because the market opens Sunday 22:00 UTC
+(21:00 in summer) and that stub runs only until midnight. Three things follow, all of which corrupt a
+regime label:
+
+- **SMA(200) covers 33 weeks instead of 40.** A "200-day" direction filter that actually spans a
+  sixth less calendar time is measuring a different thing from the one it is named after, and the
+  discrepancy is invisible in the output.
+- **ATR is dragged down.** A two-hour bar has a fraction of a day's true range, and one in six bars
+  being a stub pulls the average below what a day of movement actually is — so the volatility
+  percentile reads calmer than the market was.
+- **ADX is distorted** for the same reason: directional movement over two hours is not comparable
+  with directional movement over a day, and the smoothing mixes them.
+
+The New York close is the FX convention precisely because it yields five equal sessions a week. The
+existing `dailyLocalInstants`/`localClock` helpers already do DST-aware local-time anchoring — the
+cost overlay uses them at the same 17:00 New York instant for swap rollovers (D5) — so this reuses
+machinery that is already tested rather than introducing a second notion of a day.
+
+**Scope: regime labelling only.** Charts, strategy runs, the resampler and every stored timeframe
+keep the Exness day. A broker's day is what a trader's platform shows and what a strategy's own D1
+calls return; changing that to suit a classifier would be the tail wagging the dog. The regime series
+is an internal analytical construct and stays one.
