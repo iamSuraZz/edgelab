@@ -41,6 +41,8 @@ export interface ReplayTrade {
   readonly exitMs: number;
   /** Chart-bar index of the entry, so level lookups cannot reach into the previous position. */
   readonly entryBar?: number;
+  /** The id of the order that closed the trade, so a multi-bracket script pairs correctly. */
+  readonly exitId?: string | null;
   readonly netPnl: number;
 }
 
@@ -145,6 +147,8 @@ export interface IntrabarReplayResult {
   readonly skipped: number;
   /** Trades whose levels trail, and so cannot be replayed as fixed levels. */
   readonly trailing: number;
+  /** Trades with several exit ids in play whose closing id could not be identified. */
+  readonly ambiguous: number;
   /** Where the levels came from. `clustered` is the degraded path. */
   readonly levelSource: 'order-log' | 'clustered' | 'none';
   readonly levels: BracketLevels | null;
@@ -213,6 +217,7 @@ export function replayIntrabar(params: IntrabarReplayParams): IntrabarReplayResu
       assessed: 0,
       skipped: trades.length,
       trailing: 0,
+      ambiguous: 0,
       levelSource,
       levels,
       phantomTargets: 0,
@@ -232,6 +237,7 @@ export function replayIntrabar(params: IntrabarReplayParams): IntrabarReplayResu
   const rows: ReplayRow[] = [];
   let skipped = trades.length - levelTrades.length;
   let trailing = 0;
+  let ambiguous = 0;
 
   for (const t of levelTrades) {
     // Levels are re-read at every minute rather than fixed per trade, because an ATR or swing stop
@@ -248,6 +254,7 @@ export function replayIntrabar(params: IntrabarReplayParams): IntrabarReplayResu
             ? trade.entryPrice + levels!.targetDistance
             : trade.entryPrice - levels!.targetDistance,
         trailing: false,
+        ambiguous: false,
         setOnBar: -1,
       }));
 
@@ -266,6 +273,11 @@ export function replayIntrabar(params: IntrabarReplayParams): IntrabarReplayResu
     }
     if (touch === 'trailing') {
       trailing += 1;
+      skipped += 1;
+      continue;
+    }
+    if (touch === 'ambiguous') {
+      ambiguous += 1;
       skipped += 1;
       continue;
     }
@@ -317,6 +329,7 @@ export function replayIntrabar(params: IntrabarReplayParams): IntrabarReplayResu
     assessed: rows.length,
     skipped,
     trailing,
+    ambiguous,
     levelSource,
     levels,
     phantomTargets: rows.filter((r) => r.flip === 'phantom-target').length,
@@ -338,6 +351,11 @@ export function replayIntrabar(params: IntrabarReplayParams): IntrabarReplayResu
       (trailing > 0
         ? ` ${String(trailing)} trade(s) use a trailing stop and are n/a: a trail depends on the ` +
           'path taken since it armed, so replaying it as a fixed level would manufacture flips.'
+        : '') +
+      (ambiguous > 0
+        ? ` ${String(ambiguous)} trade(s) had several exit ids in play with no way to tell which ` +
+          'closed them, and are n/a for the same reason: pairing a fill with the wrong bracket ' +
+          'would manufacture a flip.'
         : ''),
   };
 }
@@ -369,7 +387,7 @@ interface Touch {
  * the same ambiguity a step up, and there is no deeper data to appeal to — so the tie goes to the
  * pessimistic reading, which is the only direction that cannot flatter a result.
  */
-function firstTouch(p: TouchParams): Touch | null | 'no-bars' | 'trailing' {
+function firstTouch(p: TouchParams): Touch | null | 'no-bars' | 'trailing' | 'ambiguous' {
   const { trade, m1, basis, spreadAt, levelsFor, untilMs } = p;
 
   let index = lowerBound(m1, trade.entryMs);
@@ -383,6 +401,7 @@ function firstTouch(p: TouchParams): Touch | null | 'no-bars' | 'trailing' {
     // Before the strategy first armed its bracket there is nothing resting to hit.
     if (levels === null) continue;
     if (levels.trailing) return 'trailing';
+    if (levels.ambiguous) return 'ambiguous';
 
     const q = deriveQuotes(bar, basis, spreadAt(bar));
 

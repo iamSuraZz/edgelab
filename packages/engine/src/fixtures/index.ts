@@ -133,6 +133,32 @@ if strategy.position_size < 0
 plot(e, title="EMA", color=color.orange)
 `;
 
+const PARTIAL_EXITS = `//@version=5
+strategy("Partial Exits", overlay=true, initial_capital=10000,
+     default_qty_type=strategy.fixed, default_qty_value=2)
+
+emaLen = input.int(20, "EMA length", minval=2, group="Signal")
+tp1    = input.int(100, "First target (ticks)", minval=1, group="Exits")
+tp2    = input.int(300, "Second target (ticks)", minval=1, group="Exits")
+slT    = input.int(150, "Stop (ticks)", minval=1, group="Exits")
+
+e = ta.ema(close, emaLen)
+
+if ta.crossover(close, e)
+    strategy.entry("Long", strategy.long)
+
+if ta.crossunder(close, e)
+    strategy.entry("Short", strategy.short)
+
+// TWO exit ids live at once, each with its own target. "Most recent call wins" would pair a TP1
+// fill with TP2's level and invent a flip, which is why a trade whose closing id is unknown is
+// reported n/a rather than replayed.
+strategy.exit("TP1", qty_percent=50, profit=tp1, loss=slT)
+strategy.exit("TP2", profit=tp2, loss=slT)
+
+plot(e, title="EMA", color=color.teal)
+`;
+
 const MACD_HTF_FILTER = `//@version=5
 strategy("MACD with HTF trend filter", overlay=true, initial_capital=10000,
      default_qty_type=strategy.fixed, default_qty_value=1)
@@ -225,6 +251,14 @@ export const STRATEGY_FIXTURES: readonly StrategyFixture[] = [
       'levels move every bar, so they cannot be recovered by clustering exit prices — this is the ' +
       'fixture that exercises reading them from the order log.',
     source: ATR_BRACKET,
+  },
+  {
+    id: 'partial-exits',
+    name: 'Partial Exits',
+    description:
+      'Two simultaneous strategy.exit brackets with qty_percent, so more than one exit id is live ' +
+      'on every trade. Exercises pairing a fill with the bracket that actually closed it.',
+    source: PARTIAL_EXITS,
   },
   {
     id: 'donchian-trailing',

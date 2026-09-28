@@ -397,8 +397,9 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
         t.exitBar,
         { side: t.side, entryPrice: t.entryPrice, mintick: symbolRow.mintick },
         t.entryBar,
+        t.exitReason,
       );
-      if (lv === null) return null;
+      if (lv === null || lv.ambiguous) return null;
       const dStop = lv.stop === null ? Infinity : Math.abs(t.exitPrice - lv.stop);
       const dTarget = lv.target === null ? Infinity : Math.abs(t.exitPrice - lv.target);
       if (!Number.isFinite(dStop) && !Number.isFinite(dTarget)) return null;
@@ -419,6 +420,7 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
       exitPrice: t.exitPrice,
       exitMs: t.exitTime,
       entryBar: t.entryBar,
+      exitId: t.exitReason,
       netPnl: t.netPnl,
     })),
     m1,
@@ -442,6 +444,9 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
               // Never inherit the previous position's levels: an absolute stop is derived from
               // strategy.position_avg_price and means nothing for a different trade.
               trade.entryBar,
+              // A trade records the id of the order that closed it, which is what pairs a fill with
+              // its own bracket when several are active.
+              trade.exitId,
             ),
     isLevelExit,
   });

@@ -1141,3 +1141,39 @@ same gate.
 previous day's close. Classifying a trade by the regime of the day it ran in uses that day's close to
 describe a decision taken before it, which is look-ahead inside the very report meant to detect
 look-ahead.
+
+## A25 · Several exit ids: pair by id, or report n/a
+
+A23 left a known limitation — with more than one exit id in play, the most recent call won. That is
+guesswork, and it fails in the ordinary case rather than an exotic one: a partial-exit strategy with
+a `TP1`/`TP2` pair has two brackets live on every trade, and pairing a `TP1` fill with `TP2`'s level
+manufactures a flip.
+
+Trades already carry the id of the order that closed them (`exitReason`), so the fix is to track
+levels per id and match. When the closing id cannot be identified — it names no bracket, as a
+reversal's does — the trade is reported `n/a`, following the trailing-stop rule for the same reason:
+inventing a finding is worse than declining one.
+
+Proven with a new `partial-exits` fixture: two `strategy.exit` calls, one with `qty_percent=50`, both
+live on every position. EURUSD H1 2022-01-01 .. 2024-01-01 produces 1,171 closed trades, of which
+**998 were replayed with their own bracket's levels and none were ambiguous** — the per-id path
+works, so the n/a fallback is not what carries this case.
+
+Unchanged, as required:
+
+| fixture        | levels        | flips | missed stops | phantom targets |
+| -------------- | ------------- | ----- | ------------ | --------------- |
+| rsi (fixed)    | ticks         | 14    | 4            | 10              |
+| atr-bracket    | ATR prices    | 4     | 0            | 4               |
+| partial-exits  | two ids       | 17    | 10           | 7               |
+
+## A26 · Follow-up after slice D: trailing-stop replay
+
+Not now, and recorded so it is not lost. Trailing stops are currently `n/a` in the M1 replay (A23).
+
+If a trail simulation is ever written, it must first reproduce the ENGINE's own trailing exits
+exactly, on the ENGINE's bars, before it is allowed to run on M1. A trail depends on the path taken
+since it armed, so a simulation that disagrees with the engine on the engine's own data is measuring
+its own bugs — and it would report them as flips, which is precisely the failure mode every one of
+these checks is built to avoid. Agreement on the coarse series is the only evidence that the finer
+one is telling the truth.

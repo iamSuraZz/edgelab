@@ -212,6 +212,6 @@ describe('golden snapshots — determinism', () => {
   });
 
   it('covers every shipped fixture', () => {
-    expect(STRATEGY_FIXTURES).toHaveLength(7);
+    expect(STRATEGY_FIXTURES).toHaveLength(8);
   });
 });

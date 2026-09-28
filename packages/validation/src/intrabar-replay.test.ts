@@ -230,3 +230,51 @@ describe('replayIntrabar — n/a', () => {
     expect(r.skipped).toBe(1);
   });
 });
+
+describe('replayIntrabar — several exit ids', () => {
+  it('reports a trade n/a rather than pairing it with the wrong bracket', () => {
+    // The target would be reached, but which bracket owns it is unknown.
+    const bars = [m1(0, 1.1005, 1.0995), m1(1, 1.1025, 1.1)];
+
+    const r = replayIntrabar({
+      ...base,
+      levels: undefined,
+      levelsAt: () => ({
+        stop: null,
+        target: null,
+        trailing: false,
+        ambiguous: true,
+        setOnBar: 0,
+      }),
+      trades: [trade()],
+      m1: bars,
+    });
+
+    expect(r.assessed).toBe(0);
+    expect(r.ambiguous).toBe(1);
+    expect(r.skipped).toBe(1);
+    expect(r.explanation).toContain('several exit ids');
+  });
+
+  it('replays normally once the closing bracket is known', () => {
+    const bars = [m1(0, 1.1005, 1.0995), m1(1, 1.1025, 1.1)];
+
+    const r = replayIntrabar({
+      ...base,
+      levels: undefined,
+      levelsAt: () => ({
+        stop: 1.099,
+        target: 1.102,
+        trailing: false,
+        ambiguous: false,
+        setOnBar: 0,
+      }),
+      trades: [trade()],
+      m1: bars,
+    });
+
+    expect(r.assessed).toBe(1);
+    expect(r.ambiguous).toBe(0);
+    expect(r.rows[0]!.flip).toBe('none');
+  });
+});

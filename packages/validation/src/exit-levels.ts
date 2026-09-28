@@ -48,6 +48,15 @@ export interface ResolvedLevels {
    * stale figure — a trailing stop replayed as a fixed one would manufacture flips.
    */
   readonly trailing: boolean;
+  /**
+   * True when more than one exit id was active and the caller could not say which one closed the
+   * trade.
+   *
+   * Follows the same rule as `trailing`, for the same reason: "most recent call wins" would pair a
+   * fill with another bracket's level and manufacture a flip. A partial-exit strategy with a
+   * `TP1`/`TP2` pair is the ordinary case, not an exotic one.
+   */
+  readonly ambiguous: boolean;
   /** The bar whose call produced these levels, for reporting. */
   readonly setOnBar: number;
 }
@@ -84,7 +93,7 @@ export function resolveExitLevels(row: ExitOrderRow, ctx: LevelContext): Resolve
     targetPrice ??
     (profitTicks === null ? null : ctx.entryPrice + away * profitTicks * ctx.mintick);
 
-  return { stop, target, trailing, setOnBar: row.bar };
+  return { stop, target, trailing, ambiguous: false, setOnBar: row.bar };
 }
 
 /**
@@ -131,9 +140,24 @@ export class ExitLevelIndex {
    * Returns null before the strategy has armed a bracket for THIS trade, which is the honest answer
    * for the entry bar itself: the order is placed at that bar's close and cannot be hit on it.
    */
-  levelsOnBar(bar: number, ctx: LevelContext, notBefore = -Infinity): ResolvedLevels | null {
+  levelsOnBar(
+    bar: number,
+    ctx: LevelContext,
+    notBefore = -Infinity,
+    exitId?: string | null,
+  ): ResolvedLevels | null {
+    // With one bracket in play the id is redundant. With several, pairing a fill against whichever
+    // call happened most recently is guesswork, so the trade is marked ambiguous and reported n/a
+    // unless the caller can name the id that closed it.
+    const matched = exitId == null ? [] : this.rows.filter((r) => r.args['id'] === exitId);
+    if (matched.length === 0 && this.distinctIds > 1) {
+      return { stop: null, target: null, trailing: false, ambiguous: true, setOnBar: -1 };
+    }
+
+    const candidates = matched.length > 0 ? matched : this.rows;
+
     let found: ExitOrderRow | null = null;
-    for (const row of this.rows) {
+    for (const row of candidates) {
       if (row.bar > bar - 1) break;
       if (isPositionRelative(row) && row.bar < notBefore) continue;
       found = row;

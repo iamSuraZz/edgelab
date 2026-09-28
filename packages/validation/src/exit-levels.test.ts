@@ -146,3 +146,41 @@ describe('ExitLevelIndex — trade scoping', () => {
     expect(index.levelsOnBar(9, LONG, 8)?.stop).toBe(1.05);
   });
 });
+
+describe('ExitLevelIndex — several exit ids', () => {
+  const two = [row({ id: 'TP1', profit: 100 }, 1), row({ id: 'TP2', profit: 300 }, 2)];
+
+  it('pairs a trade with the bracket that closed it', () => {
+    const index = new ExitLevelIndex(two);
+
+    expect(index.levelsOnBar(5, LONG, 0, 'TP1')?.target).toBeCloseTo(1.101, 9);
+    expect(index.levelsOnBar(5, LONG, 0, 'TP2')?.target).toBeCloseTo(1.103, 9);
+  });
+
+  it('marks a trade ambiguous when the closing id is unknown', () => {
+    const index = new ExitLevelIndex(two);
+
+    expect(index.levelsOnBar(5, LONG, 0, null)?.ambiguous).toBe(true);
+    expect(index.levelsOnBar(5, LONG, 0, undefined)?.ambiguous).toBe(true);
+  });
+
+  it('marks a trade ambiguous when its id matches no exit call', () => {
+    // A reversal closes with the opposing ENTRY's id, which is no bracket at all.
+    const index = new ExitLevelIndex(two);
+    expect(index.levelsOnBar(5, LONG, 0, 'Short')?.ambiguous).toBe(true);
+  });
+
+  it('does not demand an id when only one bracket is in play', () => {
+    const index = new ExitLevelIndex([row({ id: 'Bracket', profit: 200 }, 1)]);
+
+    expect(index.levelsOnBar(5, LONG, 0, null)?.ambiguous).toBe(false);
+    expect(index.levelsOnBar(5, LONG, 0, null)?.target).toBeCloseTo(1.102, 9);
+  });
+
+  it('never returns another bracket’s level as if it were this one’s', () => {
+    const index = new ExitLevelIndex(two);
+    const levels = index.levelsOnBar(5, LONG, 0, null);
+    expect(levels?.stop).toBeNull();
+    expect(levels?.target).toBeNull();
+  });
+});
