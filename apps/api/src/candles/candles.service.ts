@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { LRUCache } from 'lru-cache';
-import { readM1, type DbClient, type StoredSymbol } from '@edgelab/db';
+import { readM1, readM1Bars, type DbClient, type StoredSymbol } from '@edgelab/db';
 import { analyseQuality, resample, type QualityReport, type ResampleOptions } from '@edgelab/data';
 import { type Candle, type Timeframe, timeframeMs } from '@edgelab/shared';
 import { DB_CLIENT } from '../infra/infra.module';
@@ -84,7 +84,10 @@ export class CandlesService {
 
     this.assertRangeIsSane(q);
 
-    const m1 = await readM1(this.db, q.symbol.id, q.fromMs, q.toMs);
+    // A seal cutting the range short is ANNOUNCED, never silent: a run that covers less than it
+    // appears to is worse than one that refuses, because its numbers look like an answer.
+    const m1Read = await readM1(this.db, q.symbol.id, q.fromMs, q.toMs);
+    const m1 = m1Read.bars;
     const candles = resample(m1, q.timeframe, q.options);
 
     this.cache.set(key, candles);
@@ -103,7 +106,7 @@ export class CandlesService {
 
   /** Data-quality report over the same stored range. */
   async quality(symbol: StoredSymbol, fromMs: number, toMs: number): Promise<QualityReport> {
-    const m1 = await readM1(this.db, symbol.id, fromMs, toMs);
+    const m1 = await readM1Bars(this.db, symbol.id, fromMs, toMs);
     return analyseQuality(m1, { sessionType: symbol.sessionType });
   }
 

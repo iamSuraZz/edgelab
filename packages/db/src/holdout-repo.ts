@@ -1,4 +1,4 @@
-import { eq, sql } from 'drizzle-orm';
+import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 import { effectiveWindow, sealInstant, type EffectiveWindow, type Holdout } from '@edgelab/shared';
 
 import type { DbClient } from './client';
@@ -27,27 +27,52 @@ function cacheFor(client: DbClient): Map<string, Holdout | null> {
   return m;
 }
 
+type HoldoutRow = typeof holdouts.$inferSelect;
+
+function toHoldout(row: HoldoutRow): Holdout {
+  return {
+    id: row.id,
+    symbolId: row.symbolId,
+    sealedFromMs: fromDbTime(row.sealedFrom),
+    createdAtMs: fromDbTime(row.createdAt),
+    viewCount: row.viewCount,
+    lastViewedAtMs: row.lastViewedAt === null ? null : fromDbTime(row.lastViewedAt),
+    retiredAtMs: row.retiredAt === null ? null : fromDbTime(row.retiredAt),
+  };
+}
+
+/** The seal currently in force for a symbol, or null. Only an ACTIVE seal truncates a read. */
 export async function getHoldout(client: DbClient, symbolId: string): Promise<Holdout | null> {
   const m = cacheFor(client);
   const hit = m.get(symbolId);
   if (hit !== undefined) return hit;
 
-  const rows = await client.db.select().from(holdouts).where(eq(holdouts.symbolId, symbolId));
-  const row = rows[0];
+  const rows = await client.db
+    .select()
+    .from(holdouts)
+    .where(and(eq(holdouts.symbolId, symbolId), isNull(holdouts.retiredAt)));
 
-  const value: Holdout | null =
-    row === undefined
-      ? null
-      : {
-          symbolId: row.symbolId,
-          sealedFromMs: fromDbTime(row.sealedFrom),
-          createdAtMs: fromDbTime(row.createdAt),
-          viewCount: row.viewCount,
-          lastViewedAtMs: row.lastViewedAt === null ? null : fromDbTime(row.lastViewedAt),
-        };
+  const row = rows[0];
+  const value = row === undefined ? null : toHoldout(row);
 
   m.set(symbolId, value);
   return value;
+}
+
+/**
+ * Every seal this symbol has ever had, newest first.
+ *
+ * This is what makes a fresh seal's "viewed 0 times" honest or not: a reader can see that three
+ * earlier seals over the same ground were retired after a dozen views between them.
+ */
+export async function holdoutHistory(client: DbClient, symbolId: string): Promise<Holdout[]> {
+  const rows = await client.db
+    .select()
+    .from(holdouts)
+    .where(eq(holdouts.symbolId, symbolId))
+    .orderBy(desc(holdouts.createdAt));
+
+  return rows.map(toHoldout);
 }
 
 export interface SealParams {
@@ -72,8 +97,8 @@ export async function sealHoldout(params: SealParams): Promise<Holdout> {
     throw new Error(
       `A holdout is already sealed for this symbol from ` +
         `${new Date(existing.sealedFromMs).toISOString()}, viewed ${String(existing.viewCount)} ` +
-        `time(s). Re-sealing would reset that count over data already seen; drop it explicitly if ` +
-        `you really mean to start again.`,
+        `time(s). Re-sealing would reset that count over data already seen; retire it explicitly ` +
+        `if you really mean to start again — the retired seal and its count stay in the history.`,
     );
   }
 
@@ -109,9 +134,24 @@ export async function recordHoldoutView(
   return getHoldout(client, symbolId);
 }
 
-export async function dropHoldout(client: DbClient, symbolId: string): Promise<void> {
-  await client.db.delete(holdouts).where(eq(holdouts.symbolId, symbolId));
+/**
+ * Retire the active seal. NOT a delete.
+ *
+ * The row keeps its instant, its dates and its view count and stays in the symbol's history for
+ * ever. Deleting it would make retire-then-seal reset the count, which is exactly the loophole
+ * `sealHoldout` refuses to open directly — and a loophole reachable in two steps is not closed.
+ */
+export async function retireHoldout(client: DbClient, symbolId: string): Promise<Holdout | null> {
+  const active = await getHoldout(client, symbolId);
+  if (active === null) return null;
+
+  await client.db
+    .update(holdouts)
+    .set({ retiredAt: toDbTime(Date.now()) })
+    .where(eq(holdouts.id, active.id));
+
   cacheFor(client).delete(symbolId);
+  return { ...active, retiredAtMs: Date.now() };
 }
 
 /** The window a read is allowed, given whatever seal is in force. */

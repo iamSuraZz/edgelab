@@ -17,6 +17,14 @@
  */
 
 export interface Holdout {
+  /**
+   * Identifies this seal, so a report can name the one it ran under.
+   *
+   * A result is only meaningful relative to a specific seal. Without an id, a report saying "holdout
+   * viewed 0 times" is ambiguous between a pristine holdout and a fresh one over ground already
+   * walked under an earlier seal.
+   */
+  readonly id: string;
   readonly symbolId: string;
   /**
    * Start of the sealed region. Bars at or after this instant are reserved.
@@ -30,6 +38,15 @@ export interface Holdout {
   /** How many times the seal has been deliberately broken. */
   readonly viewCount: number;
   readonly lastViewedAtMs: number | null;
+  /**
+   * When this seal was retired, or null while it is in force.
+   *
+   * Retired rather than deleted. Deleting would make drop-then-seal reset the view count, which is
+   * precisely the loophole that refusing to RE-seal was meant to close — and a loophole reachable by
+   * two commands instead of one is not closed at all. A retired seal keeps its instant, its dates
+   * and its count, and remains visible in the symbol's history for ever.
+   */
+  readonly retiredAtMs: number | null;
 }
 
 export interface EffectiveWindow {
@@ -98,17 +115,42 @@ export function sealInstant(earliestMs: number, latestMs: number, fraction: numb
   return Math.round(latestMs - (latestMs - earliestMs) * fraction);
 }
 
-/** The sentence a report shows. Blunt on purpose: a viewed holdout is a weaker claim. */
-export function describeHoldout(holdout: Holdout | null): string {
-  if (holdout === null) return 'No holdout is sealed for this symbol.';
+const day = (ms: number): string => new Date(ms).toISOString().slice(0, 10);
 
-  if (holdout.viewCount === 0) {
-    return `Holdout sealed from ${new Date(holdout.sealedFromMs).toISOString().slice(0, 10)}, never viewed.`;
+/** Short identity for a report: which seal a result was obtained under. */
+export function sealLabel(holdout: Holdout): string {
+  return `seal ${holdout.id.slice(0, 8)} (from ${day(holdout.sealedFromMs)})`;
+}
+
+/**
+ * The sentence a report shows. Blunt on purpose: a viewed holdout is a weaker claim.
+ *
+ * Takes the symbol's whole history, not just the active seal, because a fresh seal showing zero
+ * views is only pristine if nothing preceded it. Prior seals over overlapping ground are exactly
+ * what a reader needs in order to discount the number.
+ */
+export function describeHoldout(active: Holdout | null, history: readonly Holdout[] = []): string {
+  const retired = history.filter((h) => h.retiredAtMs !== null);
+  const retiredViews = retired.reduce((n, h) => n + h.viewCount, 0);
+
+  const priorNote =
+    retired.length === 0
+      ? ''
+      : ` ${String(retired.length)} earlier seal(s) on this symbol were retired after ` +
+        `${String(retiredViews)} view(s) in total, so this data is not untouched.`;
+
+  if (active === null) {
+    return `No holdout is currently sealed for this symbol.${priorNote}`;
+  }
+
+  const head = `Holdout ${sealLabel(active)}`;
+
+  if (active.viewCount === 0) {
+    return `${head}, never viewed.${priorNote}`;
   }
 
   return (
-    `Holdout sealed from ${new Date(holdout.sealedFromMs).toISOString().slice(0, 10)}, ` +
-    `viewed ${String(holdout.viewCount)} time(s). Each view weakens it: data looked at repeatedly ` +
-    'is in-sample data, whatever it is labelled.'
+    `${head}, viewed ${String(active.viewCount)} time(s). Each view weakens it: data looked at ` +
+    `repeatedly is in-sample data, whatever it is labelled.${priorNote}`
   );
 }

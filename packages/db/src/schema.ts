@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import {
   boolean,
   customType,
@@ -94,16 +95,34 @@ export const candlesM1 = pgTable(
  * created — a fraction would move as new data arrived, so yesterday's out-of-sample result would
  * quietly become part of today's training set.
  */
-export const holdouts = pgTable('holdouts', {
-  symbolId: uuid('symbol_id')
-    .primaryKey()
-    .references(() => symbols.id, { onDelete: 'cascade' }),
-  sealedFrom: timestamp('sealed_from', { withTimezone: true }).notNull(),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-  /** Times the seal has been deliberately broken. The number that makes a holdout mean something. */
-  viewCount: integer('view_count').notNull().default(0),
-  lastViewedAt: timestamp('last_viewed_at', { withTimezone: true }),
-});
+export const holdouts = pgTable(
+  'holdouts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    symbolId: uuid('symbol_id')
+      .notNull()
+      .references(() => symbols.id, { onDelete: 'cascade' }),
+    sealedFrom: timestamp('sealed_from', { withTimezone: true }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    /** Times this seal has been deliberately broken. The number that makes a holdout mean anything. */
+    viewCount: integer('view_count').notNull().default(0),
+    lastViewedAt: timestamp('last_viewed_at', { withTimezone: true }),
+    /**
+     * Set when the seal is retired. Rows are NEVER deleted.
+     *
+     * Deleting would let drop-then-seal reset the view count — the same loophole that refusing to
+     * re-seal closes, reachable by two commands instead of one. The history is what makes a fresh
+     * seal's "viewed 0 times" honest or not.
+     */
+    retiredAt: timestamp('retired_at', { withTimezone: true }),
+  },
+  (t) => [
+    // At most one ACTIVE seal per symbol; retired ones accumulate freely.
+    uniqueIndex('holdouts_one_active_per_symbol')
+      .on(t.symbolId)
+      .where(sql`${t.retiredAt} IS NULL`),
+  ],
+);
 
 /** An ingest or import run, so the Data page can show history and resume. */
 export const ingestJobs = pgTable(

@@ -1,6 +1,6 @@
 import type { MessagePort } from 'node:worker_threads';
 
-import { createDbClient, findSymbolByCode, listSymbols, readM1, type DbClient } from '@edgelab/db';
+import { createDbClient, findSymbolByCode, listSymbols, readM1, readM1Bars, type DbClient } from '@edgelab/db';
 import {
   PineTsEngine,
   flattenMetrics,
@@ -164,7 +164,10 @@ export default async function backtestTask(input: BacktestTaskInput): Promise<Ba
   const spec: SymbolSpec = symbolRow;
 
   const barsFromMs = input.fromMs - warmupSpanMs(input.timeframe, input.warmupBars);
-  const m1 = await readM1(db, symbolRow.id, barsFromMs, input.toMs);
+  // A seal cutting the range short is ANNOUNCED, never silent: a run that covers less than it
+  // appears to is worse than one that refuses, because its numbers look like an answer.
+  const m1Read = await readM1(db, symbolRow.id, barsFromMs, input.toMs);
+  const m1 = m1Read.bars;
 
   // Which instruments exist at all, for the conversion planner below. One query, so a
   // cross-currency run does not probe the registry per candidate spelling.
@@ -223,7 +226,7 @@ export default async function backtestTask(input: BacktestTaskInput): Promise<Ba
       loadBars: async (code, fromMs, toMs) => {
         const row = await findSymbolByCode(db, code);
         if (row === null) return [];
-        return readM1(db, row.id, fromMs, toMs);
+        return readM1Bars(db, row.id, fromMs, toMs);
       },
     },
     // The engine's 0–100 is squeezed into 5–95 so the surrounding load and persist steps

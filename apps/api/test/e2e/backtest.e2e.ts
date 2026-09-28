@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { findSymbolByCode, readM1 } from '@edgelab/db';
+import { findSymbolByCode, readM1Bars } from '@edgelab/db';
 import { PineTsEngine, STRATEGY_FIXTURES, orchestrateRun } from '@edgelab/engine';
 import {
   DEFAULT_COSTS,
@@ -325,7 +325,7 @@ describe('the full backtest chain over HTTP', () => {
 
     const durationMs = timeframeMs(TIMEFRAME)!;
     const barsFrom = FROM - Math.ceil(RUN_CONFIG.warmupBars * durationMs * 2.5);
-    const m1 = await readM1(harness.workers.db, symbol!.id, barsFrom, TO);
+    const m1 = await readM1Bars(harness.workers.db, symbol!.id, barsFrom, TO);
 
     const engine = new PineTsEngine({
       m1: {

@@ -17,7 +17,8 @@
     "data:split-feed": "tsx src/cli/split-feed-cli.ts",
     "backfill": "tsx src/cli/backfill-cli.ts",
     "data:seed-synthetic": "tsx src/cli/seed-synthetic-cli.ts",
-    "optimize": "tsx src/cli/optimize-cli.ts"
+    "optimize": "tsx src/cli/optimize-cli.ts",
+    "holdout": "tsx src/cli/holdout-cli.ts"
   },
   "dependencies": {
     "@edgelab/data": "workspace:*",

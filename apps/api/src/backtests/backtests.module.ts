@@ -16,7 +16,7 @@ import type { Redis } from 'ioredis';
 import {
   createRun,
   findSymbolByCode,
-  readM1,
+  readM1Bars,
   readRun,
   readRunSeries,
   readRunTrades,
@@ -375,7 +375,7 @@ export class BacktestsService {
     const symbol = await findSymbolByCode(this.db, run.symbol);
     if (symbol === null) return null;
 
-    const m1 = await readM1(this.db, symbol.id, run.fromMs, run.toMs);
+    const m1 = await readM1Bars(this.db, symbol.id, run.fromMs, run.toMs);
     if (m1.length === 0) return null;
 
     const { resample } = await import('@edgelab/data');

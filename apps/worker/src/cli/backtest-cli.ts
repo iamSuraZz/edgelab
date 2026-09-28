@@ -9,6 +9,7 @@ import {
   findSymbolByCode,
   listSymbols,
   readM1,
+  readM1Bars,
   upsertStrategyVersion,
   type DbClient,
 } from '@edgelab/db';
@@ -199,7 +200,18 @@ async function main(): Promise<void> {
       toMs: args.toMs,
     });
 
-    const m1 = await readM1(db, symbolRow.id, barsFromMs, args.toMs);
+    // A seal cutting the range short is ANNOUNCED, never silent: a run that covers less than it
+    // appears to is worse than one that refuses, because its numbers look like an answer.
+    const m1Read = await readM1(db, symbolRow.id, barsFromMs, args.toMs);
+    const m1 = m1Read.bars;
+    if (m1Read.truncation !== null) {
+      const t = m1Read.truncation;
+      console.log(
+        `   NOTE: a sealed holdout cut this range at ` +
+          `${new Date(t.cutAtMs).toISOString().slice(0, 10)} — ` +
+          `${String(t.barsWithheld)} M1 bars withheld. The run below covers less than you asked for.`,
+      );
+    }
 
     if (m1.length === 0) {
       throw new Error(
@@ -347,7 +359,7 @@ async function runOne(params: RunOneParams): Promise<boolean> {
         loadBars: async (code, fromMs, toMs) => {
           const row = await findSymbolByCode(db, code);
           if (row === null) return [];
-          return readM1(db, row.id, fromMs, toMs);
+          return readM1Bars(db, row.id, fromMs, toMs);
         },
       },
       ...(args.lots > 0 ? { overrides: sizingOverride(args, spec) } : {}),

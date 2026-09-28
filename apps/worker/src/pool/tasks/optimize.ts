@@ -1,6 +1,6 @@
-import { createDbClient, findSymbolByCode, listSymbols, readM1, type DbClient } from '@edgelab/db';
+import { createDbClient, findSymbolByCode, listSymbols, readM1, readM1Bars, type DbClient } from '@edgelab/db';
 import { PineTsEngine, orchestrateRun } from '@edgelab/engine';
-import type { CostConfig, SymbolSpec, Timeframe } from '@edgelab/shared';
+import type { Bar, CostConfig, SymbolSpec, Timeframe } from '@edgelab/shared';
 import { accountMoney, timeframeMs } from '@edgelab/shared';
 
 /**
@@ -69,19 +69,19 @@ function client(databaseUrl: string): DbClient {
  * couple of windows are live at a time and an unbounded map would just retain the whole range.
  */
 const CACHE_LIMIT = 4;
-const barCache = new Map<string, Awaited<ReturnType<typeof readM1>>>();
+const barCache = new Map<string, Bar[]>();
 
 async function cachedM1(
   dbClient: DbClient,
   symbolId: string,
   fromMs: number,
   toMs: number,
-): Promise<Awaited<ReturnType<typeof readM1>>> {
+): Promise<Bar[]> {
   const key = `${symbolId}|${String(fromMs)}|${String(toMs)}`;
   const hit = barCache.get(key);
   if (hit !== undefined) return hit;
 
-  const bars = await readM1(dbClient, symbolId, fromMs, toMs);
+  const bars = (await readM1(dbClient, symbolId, fromMs, toMs)).bars;
   if (barCache.size >= CACHE_LIMIT) {
     const oldest = barCache.keys().next().value;
     if (oldest !== undefined) barCache.delete(oldest);
@@ -136,7 +136,7 @@ export default async function optimizeCandidate(
       loadBars: async (code: string, fromMs: number, toMs: number) => {
         const row = await findSymbolByCode(dbClient, code);
         if (row === null) return [];
-        return readM1(dbClient, row.id, fromMs, toMs);
+        return readM1Bars(dbClient, row.id, fromMs, toMs);
       },
     },
   });

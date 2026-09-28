@@ -30,7 +30,8 @@
     "data:split-feed": "pnpm --filter @edgelab/worker run data:split-feed",
     "backfill": "turbo run build --filter=@edgelab/db --filter=@edgelab/data && pnpm --filter @edgelab/worker run backfill",
     "data:seed-synthetic": "turbo run build --filter=@edgelab/db --filter=@edgelab/data && pnpm --filter @edgelab/worker run data:seed-synthetic",
-    "optimize": "turbo run build --filter=@edgelab/db --filter=@edgelab/data --filter=@edgelab/metrics --filter=@edgelab/engine --filter=@edgelab/validation && pnpm --filter @edgelab/worker run optimize"
+    "optimize": "turbo run build --filter=@edgelab/db --filter=@edgelab/data --filter=@edgelab/metrics --filter=@edgelab/engine --filter=@edgelab/validation && pnpm --filter @edgelab/worker run optimize",
+    "holdout": "turbo run build --filter=@edgelab/db --filter=@edgelab/shared && pnpm --filter @edgelab/worker run holdout"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

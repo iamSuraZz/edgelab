@@ -11,11 +11,13 @@ const DAY = 24 * 60 * 60_000;
 const SEAL_AT = Date.UTC(2023, 6, 1);
 
 const HOLDOUT: Holdout = {
+  id: 'abcdef12-0000-0000-0000-000000000000',
   symbolId: 's1',
   sealedFromMs: SEAL_AT,
   createdAtMs: 0,
   viewCount: 0,
   lastViewedAtMs: null,
+  retiredAtMs: null,
 };
 
 describe('effectiveWindow', () => {
@@ -89,5 +91,29 @@ describe('describeHoldout', () => {
 
   it('does not invent a holdout that was never sealed', () => {
     expect(describeHoldout(null)).toContain('No holdout');
+  });
+
+  it('names the seal, so a result is attributable to one', () => {
+    expect(describeHoldout(HOLDOUT)).toContain('abcdef12');
+  });
+
+  it('will not let a fresh seal look pristine when earlier ones were retired', () => {
+    const retired: Holdout = {
+      ...HOLDOUT,
+      id: 'old00000-0000-0000-0000-000000000000',
+      viewCount: 5,
+      retiredAtMs: SEAL_AT,
+    };
+    const text = describeHoldout(HOLDOUT, [HOLDOUT, retired]);
+
+    expect(text).toContain('never viewed');
+    expect(text).toContain('1 earlier seal(s)');
+    expect(text).toContain('5 view(s)');
+    expect(text).toContain('not untouched');
+  });
+
+  it('still reports retired seals when nothing is sealed now', () => {
+    const retired: Holdout = { ...HOLDOUT, viewCount: 2, retiredAtMs: SEAL_AT };
+    expect(describeHoldout(null, [retired])).toContain('2 view(s)');
   });
 });

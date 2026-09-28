@@ -1591,3 +1591,55 @@ behaving. `pnpm test:e2e` stays 25/25: with no holdout sealed, every read is unc
 Still to build: the `pnpm holdout` CLI (seal / status / drop), and a validation check that reports
 "holdout viewed N times" beside the verdict so a weakened holdout is visible in the report rather
 than only in the database.
+
+## A38 · A seal is retired, never deleted
+
+A37 let a holdout be dropped. That quietly undid the thing A37 was careful about: `sealHoldout`
+refuses to RE-seal because moving a boundary resets the view count over ground already walked — and
+drop-then-seal reached the same result in two commands instead of one. A loophole reachable in two
+steps is not closed.
+
+Seals are now rows with an identity and a `retired_at`, never removed. A symbol has at most one
+ACTIVE seal, enforced by a partial unique index in the database rather than by the repository, and
+any number of retired ones. `describeHoldout` takes the whole history, so a fresh seal reporting
+"never viewed" also reports that three earlier seals over the same ground were retired after twelve
+views between them. Every report names the seal it ran under — without an id, "viewed 0 times" cannot
+distinguish a pristine holdout from a fresh one over well-trodden data.
+
+Proven end to end: seal, retire, re-seal. The new seal reports *"1 earlier seal(s) on this symbol
+were retired after 0 view(s) in total, so this data is not untouched"*, and the history lists both.
+The three retired seals now on EURUSD are from this verification and stay on the record, which is the
+feature behaving.
+
+There is deliberately no `--unseal` command. Reading past a seal happens through `readM1Unsealed` at
+the point of use, which counts the view first; a command that dumped the holdout would make looking
+feel like administration rather than a decision.
+
+## A39 · Truncation is announced, never silent
+
+A37 truncated a read at the seal and said nothing. A run that covers less than it appears to is worse
+than one that refuses, because its numbers look like an answer.
+
+`readM1` now returns `{ bars, truncation }`. The truncation is part of the RETURN TYPE, not a
+callback or a queryable "last truncation", because both of those rely on remembering to look — the
+same failure that putting the seal at `readM1` was chosen to avoid. The compiler listed all sixteen
+call sites; the ones that load a run's own range surface the cut, and conversion-pair loads take a
+`readM1Bars` helper because they read the window the run was already truncated to.
+
+Withheld bars are COUNTED, not derived from the withheld duration: bars are not evenly spaced and a
+figure computed across a weekend would overstate the loss badly.
+
+Verified on EURUSD H1 with a seal at 2022-05-27 and a run requested to 2022-07-01:
+
+    pnpm backtest  NOTE: a sealed holdout cut this range at 2022-05-27 — 35621 M1 bars withheld.
+                   The run below covers less than you asked for.
+                   3,099 bars -> 2,503, 89 trades -> 71
+    pnpm validate  FAIL Sealed holdout — every figure in this report describes the shorter window
+
+A truncated run FAILS validation rather than warning: its figures answer a different question from
+the one asked. A run entirely before the seal emits nothing, and `pnpm test:e2e` stays 25/25 with no
+holdout sealed, so the announcement has no false positives.
+
+The holdout is now complete: `pnpm holdout <SYMBOL> [--status | --seal <fraction> | --retire]`, the
+seal enforced at `readM1` (A37), the history preserved (A38), and truncation announced in both the
+backtest output and the validation report (A39).

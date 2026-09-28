@@ -4,7 +4,7 @@ import {
   createDbClient,
   findSymbolByCode,
   describeCompression,
-  readM1,
+  readM1Bars,
 } from '@edgelab/db';
 import { analyseQuality, resample } from '@edgelab/data';
 import { TIMEFRAME_CODES, timeframeToPine } from '@edgelab/shared';
@@ -34,7 +34,7 @@ async function main(): Promise<void> {
     const fromMs = Date.parse(`${fromIso}T00:00:00Z`);
     const toMs = Date.parse(`${toIso}T00:00:00Z`);
 
-    const m1 = await readM1(db, symbol.id, fromMs, toMs);
+    const m1 = await readM1Bars(db, symbol.id, fromMs, toMs);
     const m1Volume = m1.reduce((s, b) => s + b.volume, 0);
 
     console.log(`symbol     ${symbol.symbol} (${symbol.assetClass}, ${symbol.sessionType})`);

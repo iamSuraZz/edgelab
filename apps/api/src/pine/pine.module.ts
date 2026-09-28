@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Inject, Injectable, Module, Post } from '@nestjs/common';
-import { readM1, type DbClient } from '@edgelab/db';
+import { readM1Bars, type DbClient } from '@edgelab/db';
 import { PineTsEngine, STRATEGY_FIXTURES, type Diagnostic, type InputSpec } from '@edgelab/engine';
 import { CompileRequestSchema, getSeedSymbol, type CompileRequest } from '@edgelab/shared';
 
@@ -41,7 +41,7 @@ export class PineService {
         readM1: async (symbolCode, fromMs, toMs) => {
           const { findSymbolByCode } = await import('@edgelab/db');
           const symbol = await findSymbolByCode(db, symbolCode);
-          return symbol === null ? [] : readM1(db, symbol.id, fromMs, toMs);
+          return symbol === null ? [] : readM1Bars(db, symbol.id, fromMs, toMs);
         },
       },
       lookupSymbol: (code) => {

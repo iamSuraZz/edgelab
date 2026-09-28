@@ -1,4 +1,14 @@
-import { findSymbolByCode, listSymbols, readM1, readRun, type DbClient } from '@edgelab/db';
+import {
+  findSymbolByCode,
+  getHoldout,
+  holdoutHistory,
+  listSymbols,
+  readM1,
+  readM1Bars,
+  readRun,
+  type DbClient,
+  type SealTruncation,
+} from '@edgelab/db';
 import { PineTsEngine, orchestrateRun, parsePineTimeframe, spreadPriceAt } from '@edgelab/engine';
 import type { SecurityCall } from '@edgelab/engine';
 import { resample } from '@edgelab/data';
@@ -44,6 +54,7 @@ import {
 import {
   accountMoney,
   describeBasis,
+  describeHoldout,
   ExitLevelIndex,
   priceBasisForSource,
   CostConfigSchema,
@@ -218,7 +229,10 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
   const feed = feedSource ?? 'unknown';
   const basis = priceBasisForSource(feed);
 
-  const m1 = await readM1(params.db, symbolRow.id, barsFromMs, run.toMs);
+  // A seal cutting the range short is ANNOUNCED, never silent: a run that covers less than it
+  // appears to is worse than one that refuses, because its numbers look like an answer.
+  const m1Read = await readM1(params.db, symbolRow.id, barsFromMs, run.toMs);
+  const m1 = m1Read.bars;
   const knownSymbols = new Set((await listSymbols(params.db)).map((r) => r.symbol.toUpperCase()));
 
   /**
@@ -257,7 +271,7 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
       loadBars: async (code: string, fromMs: number, toMs: number) => {
         const row = await findSymbolByCode(params.db, code);
         if (row === null) return [];
-        return readM1(params.db, row.id, fromMs, toMs);
+        return readM1Bars(params.db, row.id, fromMs, toMs);
       },
     },
   };
@@ -635,6 +649,11 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
   report(90, 'judging');
 
   const results: CheckResult[] = [
+    holdoutResult(
+      await getHoldout(params.db, symbolRow.id),
+      await holdoutHistory(params.db, symbolRow.id),
+      m1Read.truncation,
+    ),
     lintResult(lint),
     prefixResult(prefix, cutoffs.length),
     spliceResult(splice, cutoffs.length, spliceSkipped, spliceWindowMs),
@@ -1421,4 +1440,59 @@ function rollingOosResult(w: RollingOosResult): CheckResult {
   }
 
   return { ...base, status: w.verdict, detail: w.explanation, evidence };
+}
+
+/**
+ * The holdout's standing, as a check.
+ *
+ * Reported even when nothing is sealed, because "no holdout" is itself a fact about how much this
+ * result is worth. A run that was truncated FAILS: its numbers describe a shorter window than the
+ * one requested, and a report that quietly covers less than it says is the failure this check
+ * exists to make impossible.
+ */
+function holdoutResult(
+  active: Parameters<typeof describeHoldout>[0],
+  history: Parameters<typeof describeHoldout>[1],
+  truncation: SealTruncation | null,
+): CheckResult {
+  const base = { id: 'overfitting-holdout', label: 'Sealed holdout', severity: 'warning' as const };
+  const description = describeHoldout(active, history);
+
+  const evidence = {
+    sealed: active === null ? 0 : 1,
+    viewCount: active?.viewCount ?? 0,
+    retiredSeals: (history ?? []).filter((h) => h.retiredAtMs !== null).length,
+    barsWithheld: truncation?.barsWithheld ?? 0,
+  };
+
+  if (truncation !== null) {
+    return {
+      ...base,
+      status: 'fail',
+      detail:
+        `This run's range was CUT at ${new Date(truncation.cutAtMs).toISOString().slice(0, 10)} by ` +
+        `the sealed holdout: ${String(truncation.barsWithheld)} M1 bars were withheld of the range ` +
+        `requested to ${new Date(truncation.requestedToMs).toISOString().slice(0, 10)}. Every ` +
+        `figure in this report describes the shorter window. ${description}`,
+      evidence,
+    };
+  }
+
+  if (active === null) {
+    return {
+      ...base,
+      status: 'n/a',
+      detail: description,
+      inconclusiveReason: description,
+      evidence,
+    };
+  }
+
+  // A viewed holdout is not a failure — it is a weaker claim, and saying so is the whole job.
+  return {
+    ...base,
+    status: active.viewCount === 0 ? 'pass' : 'warn',
+    detail: description,
+    evidence,
+  };
 }

@@ -1,6 +1,6 @@
-import type { Bar } from '@edgelab/shared';
+import { effectiveWindow, type Bar } from '@edgelab/shared';
 import type { DbClient } from './client';
-import { allowedWindow, recordHoldoutView } from './holdout-repo';
+import { getHoldout, recordHoldoutView } from './holdout-repo';
 import { fromDbTime, toDbTime } from './time';
 
 /**
@@ -52,15 +52,68 @@ interface CandleRow {
  *
  * To read sealed data deliberately, call `readM1Unsealed`, which records the view first.
  */
+export interface SealTruncation {
+  readonly sealId: string;
+  /** The instant the data was cut at. */
+  readonly cutAtMs: number;
+  readonly requestedToMs: number;
+  /** Bars the request would have received had nothing been sealed. */
+  readonly barsWithheld: number;
+}
+
+/**
+ * Bars, and whether a seal cut them short.
+ *
+ * The truncation is part of the RETURN TYPE rather than a side channel, so a caller cannot obtain
+ * bars without also being handed the fact that they are incomplete. An optional callback or a
+ * queryable "last truncation" would both rely on remembering to look, which is the same failure the
+ * seal's placement at this function was chosen to avoid.
+ */
 export async function readM1(
   client: DbClient,
   symbolId: string,
   fromMs: number,
   toMs: number,
-): Promise<Bar[]> {
-  const window = await allowedWindow(client, symbolId, fromMs, toMs);
-  if (window.empty) return [];
-  return queryM1(client, symbolId, window.fromMs, window.toMs);
+): Promise<M1Read> {
+  const holdout = await getHoldout(client, symbolId);
+  const window = effectiveWindow(fromMs, toMs, holdout);
+
+  const bars = window.empty ? [] : await queryM1(client, symbolId, window.fromMs, window.toMs);
+
+  if (!window.truncated || holdout === null) return { bars, truncation: null };
+
+  // Counted rather than estimated from the withheld duration: bars are not evenly spaced, and a
+  // figure derived from a weekend would overstate the loss badly.
+  const withheld = await countM1(client, symbolId, window.toMs, toMs);
+
+  return {
+    bars,
+    truncation: {
+      sealId: holdout.id,
+      cutAtMs: holdout.sealedFromMs,
+      requestedToMs: toMs,
+      barsWithheld: withheld,
+    },
+  };
+}
+
+export interface M1Read {
+  readonly bars: Bar[];
+  /** Present when a seal cut the request short. Null when the full range was returned. */
+  readonly truncation: SealTruncation | null;
+}
+
+async function countM1(
+  client: DbClient,
+  symbolId: string,
+  fromMs: number,
+  toMs: number,
+): Promise<number> {
+  const result = await client.pool.query<{ n: string }>(
+    `SELECT count(*)::text AS n FROM candles_m1 WHERE symbol_id = $1 AND ts >= $2 AND ts < $3`,
+    [symbolId, toDbTime(fromMs), toDbTime(toMs)],
+  );
+  return Number(result.rows[0]?.n ?? 0);
 }
 
 /**
@@ -78,6 +131,16 @@ export async function readM1Unsealed(
 ): Promise<Bar[]> {
   await recordHoldoutView(client, symbolId);
   return queryM1(client, symbolId, fromMs, toMs);
+}
+
+/** Bars only, for the many callers that cannot be truncated or have already reported it. */
+export async function readM1Bars(
+  client: DbClient,
+  symbolId: string,
+  fromMs: number,
+  toMs: number,
+): Promise<Bar[]> {
+  return (await readM1(client, symbolId, fromMs, toMs)).bars;
 }
 
 async function queryM1(

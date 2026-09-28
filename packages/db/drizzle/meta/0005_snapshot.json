@@ -1,5 +1,5 @@
 {
-  "id": "8bf9115f-7af5-48b7-bc9a-0185c4019661",
+  "id": "8bdfce38-ee58-4938-9047-5ec9d2475724",
   "prevId": "31a73a62-e050-46b8-9d6c-477fdafcbac9",
   "version": "7",
   "dialect": "postgresql",
@@ -367,10 +367,17 @@
       "name": "holdouts",
       "schema": "",
       "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
         "symbol_id": {
           "name": "symbol_id",
           "type": "uuid",
-          "primaryKey": true,
+          "primaryKey": false,
           "notNull": true
         },
         "sealed_from": {
@@ -398,9 +405,32 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
+        },
+        "retired_at": {
+          "name": "retired_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
         }
       },
-      "indexes": {},
+      "indexes": {
+        "holdouts_one_active_per_symbol": {
+          "name": "holdouts_one_active_per_symbol",
+          "columns": [
+            {
+              "expression": "symbol_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"holdouts\".\"retired_at\" IS NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
       "foreignKeys": {
         "holdouts_symbol_id_symbols_id_fk": {
           "name": "holdouts_symbol_id_symbols_id_fk",
