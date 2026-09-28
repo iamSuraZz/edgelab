@@ -9,6 +9,8 @@ import {
   auditFills,
   checkBidAskAsymmetry,
   describePerFill,
+  replayIntrabar,
+  type IntrabarReplayResult,
   levelExitIdsFromSource,
   type AsymmetryResult,
   cutoffsFor,
@@ -112,6 +114,7 @@ export interface ValidationReport {
   readonly prefix: PrefixInvarianceResult | null;
   readonly sameBar: SameBarBiasEstimate | null;
   readonly asymmetry: AsymmetryResult | null;
+  readonly replay: IntrabarReplayResult | null;
   readonly elapsedMs: number;
 }
 
@@ -367,6 +370,30 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
     isLevelExit,
   });
 
+  /* --------------------------------------- M1 intrabar replay (spec 06 §2) */
+
+  // Runs on the raw M1 series, not the chart bars: the whole point is to see inside a chart bar.
+  const replay = replayIntrabar({
+    trades: full.trades.map((t, i) => ({
+      seq: i + 1,
+      side: t.side,
+      qty: t.qty,
+      entryPrice: t.entryPrice,
+      entryMs: t.entryTime,
+      exitPrice: t.exitPrice,
+      exitMs: t.exitTime,
+      netPnl: t.netPnl,
+    })),
+    m1,
+    basis,
+    spreadAt: (bar) => spreadPriceAt(bar, symbolRow, costConfig),
+    valuePerPricePerLot: symbolRow.contractSize * symbolRow.pointValue,
+    scale: { mintick: symbolRow.mintick, pipSize: symbolRow.pipSize },
+    // A trade's exitMs is its exit BAR's open, so the replay walks to that bar's close.
+    chartBarMs: tfMs,
+    isLevelExit,
+  });
+
   /* --------------------------------------------------------- the checks */
 
   report(90, 'judging');
@@ -378,6 +405,7 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
     causality,
     fillAuditResult(fills, symbolRow.mintick),
     asymmetryResult(asymmetry, feed),
+    replayResult(replay),
     ...runChecks(BUILT_IN_CHECKS, {
       bars: full.engineResult.bars,
       timeframe,
@@ -428,6 +456,7 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
     prefix,
     sameBar,
     asymmetry,
+    replay,
     elapsedMs: Date.now() - startedAt,
   };
 }
@@ -966,6 +995,73 @@ function asymmetryResult(a: AsymmetryResult, source: string): CheckResult {
           `the far side of the spread — ${describePerFill(a.perFill)}. No outcome flips. ` +
           `${a.explanation}`
         : `${String(a.assessed)} level exits carry no bid/ask error. ${a.explanation}`,
+    evidence,
+  };
+}
+
+/**
+ * The M1 replay as a verdict.
+ *
+ * Any flip is a FAIL. A phantom target books a win that never happened; a missed stop books a win
+ * where a loss really occurred. Both change the sign of a trade, which is a different category of
+ * wrong from mispricing one — and a missed stop is invisible in every other report the run produces,
+ * because its evidence sits on a bar where nothing appeared to happen.
+ */
+function replayResult(r: IntrabarReplayResult): CheckResult {
+  const base = {
+    id: 'execution-intrabar-replay',
+    label: 'Execution (M1 intrabar replay)',
+    severity: 'critical' as const,
+  };
+
+  if (r.assessed === 0) {
+    return { ...base, status: 'n/a', detail: r.explanation, inconclusiveReason: r.explanation };
+  }
+
+  const evidence = {
+    exitsReplayed: r.assessed,
+    skipped: r.skipped,
+    phantomTargets: r.phantomTargets,
+    missedStops: r.missedStops,
+    netPnlDelta: Number(r.netPnlDelta.toFixed(2)),
+    stopDistance: r.levels?.stopDistance ?? 0,
+    targetDistance: r.levels?.targetDistance ?? 0,
+  };
+
+  const flips = r.phantomTargets + r.missedStops;
+  if (flips === 0) {
+    return {
+      ...base,
+      status: 'pass',
+      detail: `No outcome changes. ${r.explanation}`,
+      evidence,
+    };
+  }
+
+  const worst = r.rows
+    .filter((row) => row.flip === 'missed-stop')
+    .sort((a, b) => a.netPnlCorrected - a.netPnlReported - (b.netPnlCorrected - b.netPnlReported))
+    .slice(0, 3);
+
+  return {
+    ...base,
+    status: 'fail',
+    detail:
+      `${String(flips)} of ${String(r.assessed)} replayed exits change outcome — ` +
+      `${String(r.missedStops)} missed stop(s), ${String(r.phantomTargets)} phantom target(s). ` +
+      `Net P&L correction ${r.netPnlDelta.toFixed(2)}` +
+      (worst.length > 0
+        ? `. Worst: ` +
+          worst
+            .map(
+              (row) =>
+                `trade ${String(row.seq)} ${row.side} closed at ${String(row.enginePrice)} but its ` +
+                `stop went at ${(row.truePrice ?? 0).toFixed(5)} first ` +
+                `(${(row.netPnlCorrected - row.netPnlReported).toFixed(2)})`,
+            )
+            .join('; ')
+        : '') +
+      `. ${r.explanation}`,
     evidence,
   };
 }

@@ -997,3 +997,79 @@ is why a flip is a `fail` and the level error alone is a `warn`.
 
 A flip is scored only for TARGETS. A stop moves in the direction that makes it trigger sooner, so it
 always still triggers — adverse, but not an outcome that can vanish.
+
+## A21 · Every execution-bias total also reports per fill, in pips and ticks
+
+A total in account currency is the worst unit for noticing that something is wrong. "$9,080.99" over
+an unstated number of fills is unfalsifiable at a glance; "$12.58 per fill, 1.26 pips" is checkable
+against what an H1 EURUSD bar actually does. All three execution-bias checks now report both, derived
+from the PRICE gap each already computes — never by dividing money by a position size, which would
+reintroduce the very lots-vs-units question these figures exist to expose.
+
+Fills are also split by what sat between the signal bar and the fill: `normal` (one timeframe step),
+`session` (a rollover or holiday) and `weekend`. The weekend test is calendar-based rather than a
+duration threshold, because a Friday-to-Monday D1 step is only three days and no threshold separates
+it from an ordinary one.
+
+**It found a defect on its first run.** The same-bar estimate reported 1.26 pips per fill adverse,
+and the breakdown showed 718 of 722 fills were `normal` gaps — so it was not weekend risk, and a
+one-minute close-to-open move on H1 EURUSD is a fraction of that and randomly signed. The cause:
+`marketFillsFromTrades` documents that only MARKET fills are comparable against the previous bar's
+close, and `validateRun` was not passing `isMarketFill`. All 361 bracket exits were being scored as
+if they had filled at the next bar's open, when they filled at their own LEVEL. On a losing run that
+is systematically adverse, because stops outnumber targets.
+
+    before   9080.99 over 722 fills   12.58/fill   1.26 pips
+    after      -5.02 over 361 fills   -0.01/fill  -0.00 pips
+
+The corrected figure is the honest one and it is near zero, which is itself the finding: on an
+M1-resampled feed one bar's close and the next bar's open are adjacent minutes, so
+`process_orders_on_close` would barely move this strategy's entries. The level-exit classifier from
+A20 is what makes the exclusion possible.
+
+## A22 · Missed stops are flips, and only an M1 replay can see them
+
+A20's flip rule examines exits that HAPPENED, so it can only find phantom targets — a level the
+correct quote never reached on the bar the engine closed on. It is blind to the opposite and worse
+error: the side that trades crossing the stop on an EARLIER bar, on which the stored prices never
+did. The trade really closed at a loss; the engine kept it open, often to a target. A missed stop
+changes the SIGN of a trade and appears in no report the run produces.
+
+The M1 replay walks every resting-order trade from entry to the close of its exit bar, minute by
+minute, deriving both sides of the book from the feed's basis — a long's stop and target both trigger
+on the BID because a long exits by selling; a short's both trigger on the ASK. The first level
+genuinely touched wins. When one minute touches both, the STOP wins: a minute is still a bar with the
+same ambiguity a step down, there is no deeper data to appeal to, and the pessimistic reading is the
+only direction that cannot flatter a result.
+
+**Levels are recovered from the run's own exits**, because the engine keeps no order log. A resting
+order fills AT its level, so every favourable exit sits one target-distance from its entry and every
+adverse exit one stop-distance; a supermajority vote on each cluster recovers both. This is not
+circular with what the replay tests — the replay asks WHEN a level was reached, and the level is
+correct even when the timing is not. Without two tight clusters the check reports `n/a`: a trailing
+or dynamic stop needs a real order log, and inventing levels would manufacture flips rather than find
+them.
+
+Verified on `rsi-mean-reversion`, H1, 2022-01-01 .. 2024-01-01, both feeds:
+
+| feed               | basis | exits | missed stops | phantom targets | P&L correction |
+| ------------------ | ----- | ----- | ------------ | --------------- | -------------- |
+| EURUSD (dukascopy) | bid   | 89    | **1**        | 0               | -255.00        |
+| EURUSD.twelvedata  | mid   | 361   | **4**        | 10              | -850.00        |
+
+Two things make this credible. **Zero phantom targets on the bid feed** is exactly right and was not
+arranged: on a bid feed the engine triggers on the stored price and a long exits on the bid, which
+are the same number, so long targets must reproduce exactly. And the mid feed's **10 phantom targets
+match A20's 10 flips**, found independently from the whole holding period rather than from the exit
+bar.
+
+The five missed stops are the new finding, and they are invisible to every other check. Trade 73 on
+the clean dukascopy feed entered and exited inside the SAME H1 bar (2022-05-31 14:00), whose M1 low
+reached 1.06889 — well through its 1.07026 stop — and the engine booked the +20-pip target. That is
+textbook intrabar ambiguity, and the engine resolved it OPTIMISTICALLY.
+
+**A window bug was caught here and is worth recording.** The first version walked from entry to
+`exitMs` and reported a third of all exits as phantom targets on the bid feed, where long targets are
+exact by construction. A trade's `exitMs` is its exit BAR's open time (this repo's convention), and
+the level that closed the trade was reached somewhere INSIDE that bar — so the replay has to walk to
+the bar's CLOSE. The implausible number is what exposed it, which is the argument for A21.
