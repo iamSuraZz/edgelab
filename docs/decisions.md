@@ -1643,3 +1643,35 @@ holdout sealed, so the announcement has no false positives.
 The holdout is now complete: `pnpm holdout <SYMBOL> [--status | --seal <fraction> | --retire]`, the
 seal enforced at `readM1` (A37), the history preserved (A38), and truncation announced in both the
 backtest output and the validation report (A39).
+
+## A40 · Three constraints for the remaining checks
+
+**Regime labels get their full lookback, or none.** Direction needs 200 D1 bars before the window and
+the volatility percentile needs 252. Days without that history are labelled `unclassified` rather
+than computed from an expanding window: an expanding window makes the first weeks' labels mean
+something different from the rest, so a regime breakdown would compare a 30-bar direction against a
+200-bar one and call both "trending". The unclassified share is reported, because a breakdown that
+silently covers half the run is worse than one that says so. Verified on `EURUSD.twelvedata`, whose
+two years give the lookback real coverage — the six-month dukascopy working set would be almost
+entirely unclassified once 252 D1 bars are required, which is itself the argument for the rule.
+
+**A timeframe-matrix cell is `n/a` when the chart timeframe is HIGHER than one the script requests
+through `request.security`.** A script reading H1 inside an M15 chart is doing something coherent;
+the same script on a D1 chart is asking for a lower timeframe than its own bars, which PineTS and
+TradingView resolve differently and neither resolves usefully. Running it anyway produces a number,
+and a number from an incoherent configuration is worse than a blank. The causality log (A1a) already
+records every requested timeframe, so this is known rather than guessed, and the reason is printed in
+the cell.
+
+**Holdout truncation records the EFFECTIVE range as the run's range**, with the requested range
+recorded beside it, and the check drops from `fail` to `warn`.
+
+A39 kept the requested range on the run and failed the check, which was the wrong shape twice over.
+A run whose stored range says one thing while its bars say another is a lie in the database, and
+every downstream consumer — the report header, the compare view, the metrics window — would have to
+remember to correct for it. Recording what actually ran makes the numbers match their stated window
+by construction, and the requested range beside it is what makes the truncation visible.
+
+And `fail` was the wrong severity: it is reserved for a strategy failing a check. A truncated run is
+not a failing strategy, it is a shorter question honestly answered. `warn` says so without implying
+the strategy did anything wrong.
