@@ -95,7 +95,7 @@ pnpm run import:file mt5 EURUSD <abs.csv> 120        # 120 = broker server UTC o
 
 ## Current status — NOT v1.0
 
-Green: `build` 9/9, `typecheck` 16/16, `lint` clean, **951 tests** (`pnpm test`).
+Green: `build` 9/9, `typecheck` 16/16, `lint` clean, **962 tests** (`pnpm test`).
 CI runs all five checks on every push — see `.github/workflows/ci.yml`.
 
 **Verified against the real docker stack:**
@@ -171,9 +171,17 @@ roadmap's "in the browser" is NOT met.
 | Exness imports + MT5 parity test (A12)                             | **NOT PLANNED** — no exports |
 
 **Execution bias, the OOS split (A32), rolling out-of-sample (A34), walk-forward optimisation (A35)
-the sealed holdout (A37-A39), the regime classifier (A41/A42) and the TIMEFRAME MATRIX (A44) are all
-done and verified.** **Monte Carlo is the last check in step 1** — its reshuffle rule is recorded as
-A43. Then step 2 (endpoint + SSE) and step 3 (Integrity tab). Each must run through `pnpm validate` on the 2022 data before the next
+**STEP 1 IS COMPLETE.** All seventeen checks run in one pass, in 6.7s on six months of H1:
+
+    Sealed holdout · Look-ahead (static lint, prefix invariance, future splice, causality)
+    Execution (fill audit, bid/ask asymmetry, M1 intrabar replay, cost stress)
+    Out-of-sample split · Rolling out-of-sample · Regime mix · Timeframe matrix
+    Monte Carlo · Bar integrity · Trades within data window · Trade sample size
+
+Walk-forward optimisation (A35) sits beside them as an opt-in CLI check, because 1,204 engine runs
+cannot live in a suite that answers in seconds. **What remains for slice D is step 2 (`POST
+/backtests/:id/validate` + SSE) and step 3 (the Integrity tab)** — after which the DONE WHEN, which
+requires this exercised in a browser, can be met for the first time. Each must run through `pnpm validate` on the 2022 data before the next
 starts. A24 records four constraints agreed ahead of those steps; A26 (trailing-stop replay), A30
 (regime mix in the OOS report) and A31 (spread on resting fills from the replay) are post-slice-D
 follow-ups.
@@ -356,7 +364,7 @@ keeping both layers: truncation covers unbounded leaks, splicing covers bounded 
 | 03 Pine engine     | done, verified  | **code, unverified** | **code, unverified** |
 | 04 runs/costs/eqty | **done** (CLI)  | **code, unverified** | **code, unverified** |
 | 05 metrics         | done, verified  | **code, unverified** | **code, unverified** |
-| 06 validation      | **step 1 done** | ✗                    | ✗                    |
+| 06 validation      | **step 1 DONE** | ✗                    | ✗                    |
 | 07 deployment      | done, verified  | n/a                  | ✗                    |
 
 **The CLI end-to-end backtest is verified; the HTTP one is not.** `pnpm backtest` chains engine →
