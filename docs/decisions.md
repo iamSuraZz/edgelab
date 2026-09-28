@@ -1705,12 +1705,59 @@ regime label:
 - **ADX is distorted** for the same reason: directional movement over two hours is not comparable
   with directional movement over a day, and the smoothing mixes them.
 
-The New York close is the FX convention precisely because it yields five equal sessions a week. The
-existing `dailyLocalInstants`/`localClock` helpers already do DST-aware local-time anchoring — the
-cost overlay uses them at the same 17:00 New York instant for swap rollovers (D5) — so this reuses
-machinery that is already tested rather than introducing a second notion of a day.
+**The New York anchor alone does NOT deliver five sessions, and measuring it is what showed that.**
+The first implementation gave 5.81 sessions a week and a 200-bar span of 33.7 weeks — barely better
+than the 33.1 it was supposed to fix. The cause: the feed carries 8,708 Sunday bars over a year
+because the market opens Sunday evening, and 17:00 New York is 21:00 UTC in summer but 22:00 in
+winter — so in winter the boundary lands exactly on those opening bars and cuts 41 sessions of a
+single bar each. The anchor had MOVED the stub, not removed it.
+
+The FX week's first session runs from the Sunday open to Monday's close, so a Sunday boundary should
+not exist at all. Dropping it (`fxSessionBoundaries`) is what actually works. Measured over one year
+of EURUSD.twelvedata:
+
+|                                | FX week (NY close, no Sunday) | Exness day (00:00 UTC) |
+| ------------------------------ | ----------------------------- | ---------------------- |
+| daily sessions                 | 260                           | 312                    |
+| sessions per week              | **5.00**                      | 6.00                   |
+| span of 200 bars               | **39.6 weeks**                | **33.1 weeks**         |
+| mean daily range               | 0.01017                       | 0.00880                |
+| stub bars (<25% of mean range) | **0**                         | 34                     |
+
+So SMA(200) really does cover 40 weeks rather than 33, and the Exness day understates a day's range
+by **13.5%** — which is the ATR distortion, now quantified rather than asserted.
+
+The existing `dailyLocalInstants`/`localClock` helpers do the DST-aware anchoring — the cost overlay
+uses them at the same 17:00 New York instant for swap rollovers (D5) — so this reuses machinery that
+is already tested rather than introducing a second notion of a day.
 
 **Scope: regime labelling only.** Charts, strategy runs, the resampler and every stored timeframe
 keep the Exness day. A broker's day is what a trader's platform shows and what a strategy's own D1
 calls return; changing that to suit a classifier would be the tail wagging the dog. The regime series
 is an internal analytical construct and stays one.
+
+## A42 · Regime classifier
+
+Built on the A40/A41 rules. Verified on both feeds, and the two results are the argument for the
+rules rather than a formality:
+
+    EURUSD.twelvedata, 2 years   warn — trending-up -2904 (138 trades, 38%),
+                                 trending-down -1200 (50, 14%), ranging +276 (28, 8%).
+                                 Exactly one regime made money at all.
+    EURUSD dukascopy, 6 months   n/a — 100% of daily sessions lack the full lookback,
+                                 leaving 100% of trades unclassified.
+
+The six-month run is entirely unclassified, exactly as A40 predicted, and that is the honest output:
+a 252-session volatility lookback cannot be satisfied by 130 sessions, and shortening it until
+numbers appear would mean labelling a quarter's volatility as though it were a year's.
+
+On the two-year feed 60% of trades are classified and the breakdown says something the headline
+metrics cannot: the strategy loses in both trending directions and makes its only money ranging. A
+`warn`, never a `fail` — earning in one regime is a fact about a strategy, not a defect. What makes
+it worth saying is that a regime-confined edge is a bet the regime persists, and nothing else in the
+report discloses that bet.
+
+Direction is SMA distance as a percentage of price rather than slope, because slope has units of
+price per bar and is not comparable between EURUSD at 1.08 and XAUUSD at 2400. Volatility is a
+trailing rank rather than a z-score: volatility is not normally distributed, and "higher than 90% of
+the last year" is directly actionable where "2.7 sigma" is not.

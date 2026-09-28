@@ -11,7 +11,7 @@ import {
 } from '@edgelab/db';
 import { PineTsEngine, orchestrateRun, parsePineTimeframe, spreadPriceAt } from '@edgelab/engine';
 import type { SecurityCall } from '@edgelab/engine';
-import { resample } from '@edgelab/data';
+import { dailyLocalInstants, localClock, resample } from '@edgelab/data';
 import {
   BUILT_IN_CHECKS,
   bucketsFromCandles,
@@ -19,6 +19,11 @@ import {
   auditFills,
   analyseCostStress,
   analyseOosSplit,
+  breakdownByRegime,
+  dailySessions,
+  fxSessionBoundaries,
+  labelDays,
+  type RegimeBreakdown,
   analyseRollingOos,
   foldWindows,
   splitInstant,
@@ -132,6 +137,16 @@ const COST_STRESS_EXTENSIONS = [5, 10, 20] as const;
 const OOS_SPLIT_FRACTION = 0.7;
 
 /**
+ * Calendar days of history loaded before the run, for the regime lookback.
+ *
+ * 252 trading sessions is roughly a calendar year, and weekends mean a year of sessions needs
+ * appreciably more than a year of days. 500 leaves room for holidays without loading a decade.
+ */
+const REGIME_LOOKBACK_DAYS = 500;
+const NY_TIME_ZONE = 'America/New_York';
+const NY_CLOSE_MINUTE_OF_DAY = 17 * 60;
+
+/**
  * Rolling walk-forward layout: 4 folds, each training on 3 blocks and testing on 1.
  *
  * Four rather than ten because each fold is two engine runs and, more importantly, because a finer
@@ -179,6 +194,7 @@ export interface ValidationReport {
   readonly stress: CostStressResult | null;
   readonly oos: OosSplitResult | null;
   readonly rollingOos: RollingOosResult | null;
+  readonly regimes: RegimeBreakdown | null;
   readonly elapsedMs: number;
 }
 
@@ -644,6 +660,32 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
 
   const rollingOos = analyseRollingOos({ folds: foldMetrics });
 
+  /* --------------------------------------------- regimes (spec 06 §3) */
+
+  report(98, 'regimes');
+
+  // D1 sessions on the NEW YORK close (A41), not the Exness 00:00 UTC day. The Exness day adds a
+  // two-hour Sunday stub to every week, which shortens SMA(200)'s real span by a sixth and drags
+  // ATR below what a day of movement is. Same helper the cost overlay uses for swap rollovers.
+  //
+  // The lookback is loaded BEFORE the run's own window: 252 daily sessions is about a year, and
+  // labelling from the run's bars alone would leave the whole test unclassified (A40).
+  const regimeFromMs = run.fromMs - REGIME_LOOKBACK_DAYS * 24 * 60 * 60_000;
+  const regimeM1 = await readM1Bars(params.db, symbolRow.id, regimeFromMs, run.toMs);
+
+  // Sunday boundaries are removed: the FX week's first session runs from the Sunday open to
+  // Monday's close, and a Sunday boundary would cut a one-bar stub out of it (A41).
+  const boundaries = fxSessionBoundaries(
+    dailyLocalInstants(regimeFromMs, run.toMs, NY_TIME_ZONE, NY_CLOSE_MINUTE_OF_DAY),
+    (atMs) => localClock(atMs, NY_TIME_ZONE).dayOfWeek,
+  );
+
+  const dayLabels = labelDays(dailySessions(regimeM1, boundaries));
+  const regimes = breakdownByRegime(
+    full.trades.map((t) => ({ entryMs: t.entryTime, netPnl: t.netPnl })),
+    dayLabels,
+  );
+
   /* --------------------------------------------------------- the checks */
 
   report(90, 'judging');
@@ -669,6 +711,7 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
     costStressResult(stress),
     oosResult(oos),
     rollingOosResult(rollingOos),
+    regimeResult(regimes),
     ...runChecks(BUILT_IN_CHECKS, {
       bars: full.engineResult.bars,
       timeframe,
@@ -723,6 +766,7 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
     stress,
     oos,
     rollingOos,
+    regimes,
     elapsedMs: Date.now() - startedAt,
   };
 }
@@ -1503,6 +1547,69 @@ function holdoutResult(
     ...base,
     status: active.viewCount === 0 ? 'pass' : 'warn',
     detail: description,
+    evidence,
+  };
+}
+
+/**
+ * The regime breakdown as a check.
+ *
+ * Never a failure: earning in one regime is a fact about a strategy, not a defect. It WARNS when a
+ * single regime carries essentially all the profit, because that is a concentration risk the
+ * headline metrics hide completely — and it reports `n/a` when the lookback leaves most trades
+ * unlabelled, rather than describing a run from the quarter of it that happened to qualify.
+ */
+function regimeResult(r: RegimeBreakdown): CheckResult {
+  const base = { id: 'overfitting-regimes', label: 'Regime mix', severity: 'warning' as const };
+
+  const evidence = {
+    trades: r.totalTrades,
+    unclassifiedPct: Number(r.unclassifiedPct.toFixed(1)),
+    unclassifiedDaysPct: Number(r.unclassifiedDaysPct.toFixed(1)),
+    ...Object.fromEntries(
+      r.buckets.map((b) => [b.regime, Number(b.netProfit.toFixed(2))] as const),
+    ),
+  };
+
+  if (r.totalTrades === 0 || r.unclassifiedPct >= 50) {
+    return {
+      ...base,
+      status: 'n/a',
+      detail: r.explanation,
+      inconclusiveReason: r.explanation,
+      evidence,
+    };
+  }
+
+  const classified = r.buckets.filter((b) => b.regime !== 'unclassified');
+  const summary = classified
+    .map(
+      (b) =>
+        `${b.regime} ${b.netProfit.toFixed(0)} over ${String(b.trades)} trade(s) ` +
+        `(${b.sharePct.toFixed(0)}%)`,
+    )
+    .join('; ');
+
+  const totalProfit = classified.reduce((s, b) => s + Math.max(0, b.netProfit), 0);
+  const biggest = classified.reduce(
+    (best, b) => (b.netProfit > best ? b.netProfit : best),
+    -Infinity,
+  );
+  const concentrated = totalProfit > 0 && biggest / totalProfit >= 0.9;
+  // "100% of the gross profit" reads oddly on a losing run, where it means one regime was the only
+  // one that made anything at all. Say which it is.
+  const profitable = classified.filter((b) => b.netProfit > 0).length;
+
+  return {
+    ...base,
+    status: concentrated ? 'warn' : 'pass',
+    detail: concentrated
+      ? (profitable === 1
+          ? `Exactly one regime made money at all: `
+          : `One regime carries ${((biggest / totalProfit) * 100).toFixed(0)}% of the gross profit: `) +
+        `${summary}. An edge confined to one regime is a bet that the regime persists, which the ` +
+        `headline metrics do not show. ${r.explanation}`
+      : `${summary}. ${r.explanation}`,
     evidence,
   };
 }
