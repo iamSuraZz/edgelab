@@ -215,7 +215,14 @@ export class PineTsEngine implements PineEngine {
 
     params.onProgress?.(15, 'executing script');
 
+    // A3: the transpile/prepare cost is measured, not assumed, because walk-forward pays it once
+    // per fold and the ETA has to be based on something real. `setupMs` covers parsing the script,
+    // transpiling it, applying overrides and installing the seams — no bars and no I/O.
+    const setupMs = Date.now() - startedAt;
+
+    const executeStartedAt = Date.now();
     const ctx = (await pine.run(ind as unknown as Indicator)) as unknown as ContextLike;
+    const executeMs = Date.now() - executeStartedAt;
 
     // The provider records instead of throwing, because a rejection inside
     // request.security escapes as an unhandled rejection and never reaches this promise.
@@ -252,6 +259,8 @@ export class PineTsEngine implements PineEngine {
       openTrades: ctx.strategy?.opentrades?.length ?? 0,
       barsProcessed: bars.length,
       runtimeMs: Date.now() - startedAt,
+      setupMs,
+      executeMs,
       warmupBars: bars.filter((b) => b.time < params.fromMs).length,
       indicatorWarmupBars: countIndicatorWarmup(plots),
       suppressedOrders: instrumentation.suppressed(),

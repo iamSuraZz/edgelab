@@ -213,6 +213,15 @@ export interface EngineStats {
   readonly openTrades: number;
   readonly barsProcessed: number;
   readonly runtimeMs: number;
+  /**
+   * Script preparation only: parse, transpile, overrides, seam installation. No bars, no I/O.
+   *
+   * Separated from `executeMs` because walk-forward pays this once per FOLD while the per-bar cost
+   * falls with the fold size, so which one dominates decides whether folds are cheap (A3).
+   */
+  readonly setupMs: number;
+  /** Bar loading and per-bar execution. */
+  readonly executeMs: number;
   /** Bars loaded purely for warmup, before the trading window. */
   readonly warmupBars: number;
   /** How many leading bars the script's own indicators needed before emitting. */

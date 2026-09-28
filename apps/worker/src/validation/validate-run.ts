@@ -9,7 +9,10 @@ import {
   auditFills,
   analyseCostStress,
   analyseOosSplit,
+  analyseWalkForward,
+  foldWindows,
   splitInstant,
+  type WalkForwardResult,
   type OosSplitResult,
   type SegmentMetrics,
   checkBidAskAsymmetry,
@@ -118,6 +121,17 @@ const COST_STRESS_EXTENSIONS = [5, 10, 20] as const;
 const OOS_SPLIT_FRACTION = 0.7;
 
 /**
+ * Rolling walk-forward layout: 4 folds, each training on 3 blocks and testing on 1.
+ *
+ * Four rather than ten because each fold is two engine runs and, more importantly, because a finer
+ * layout produces test windows too small to hold enough trades — at which point the check reports
+ * `n/a` and has told you nothing. The fold count is a statement about trade frequency, not about
+ * statistical power.
+ */
+const WALK_FORWARD_FOLDS = 4;
+const WALK_FORWARD_IS_RATIO = 3;
+
+/**
  * How much of the future to replace, sized to the longest timeframe the script actually requests.
  *
  * A fixed week was the first cut and it is not enough. The leak horizon is one bucket of whatever
@@ -153,6 +167,7 @@ export interface ValidationReport {
   readonly replay: IntrabarReplayResult | null;
   readonly stress: CostStressResult | null;
   readonly oos: OosSplitResult | null;
+  readonly walkForward: WalkForwardResult | null;
   readonly elapsedMs: number;
 }
 
@@ -596,6 +611,25 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
     splitFraction: OOS_SPLIT_FRACTION,
   });
 
+  /* ----------------------------------------- walk-forward (spec 06 §3) */
+
+  report(97, 'walk-forward');
+
+  // Rolling folds, each half its own run from the same starting capital — the same A24 reasoning as
+  // the OOS split, applied repeatedly. Cost is known rather than guessed (A3): setup is a flat
+  // ~14ms and execution ~39ms + 0.042ms/bar, so these 2N runs are affordable at this fold count.
+  const windows = foldWindows(run.fromMs, run.toMs, WALK_FORWARD_FOLDS, WALK_FORWARD_IS_RATIO);
+
+  const foldMetrics = [];
+  for (const w of windows) {
+    foldMetrics.push({
+      inSample: await segment(w.isFromMs, w.isToMs),
+      outOfSample: await segment(w.oosFromMs, w.oosToMs),
+    });
+  }
+
+  const walkForward = analyseWalkForward({ folds: foldMetrics });
+
   /* --------------------------------------------------------- the checks */
 
   report(90, 'judging');
@@ -610,6 +644,7 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
     replayResult(replay),
     costStressResult(stress),
     oosResult(oos),
+    walkForwardResult(walkForward),
     ...runChecks(BUILT_IN_CHECKS, {
       bars: full.engineResult.bars,
       timeframe,
@@ -663,6 +698,7 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
     replay,
     stress,
     oos,
+    walkForward,
     elapsedMs: Date.now() - startedAt,
   };
 }
@@ -1354,4 +1390,35 @@ function oosResult(o: OosSplitResult): CheckResult {
   }
 
   return { ...base, status: o.verdict, detail: o.explanation, evidence };
+}
+
+/** Walk-forward as a verdict. */
+function walkForwardResult(w: WalkForwardResult): CheckResult {
+  const base = {
+    id: 'overfitting-walk-forward',
+    label: 'Walk-forward',
+    severity: 'critical' as const,
+  };
+
+  const evidence = {
+    folds: w.folds.length,
+    assessableFolds: w.assessableFolds,
+    foldsWithEdge: w.foldsWithEdge,
+    foldsSurviving: w.foldsSurviving,
+    consistencyPct: w.consistency === null ? 0 : Number((w.consistency * 100).toFixed(1)),
+    medianWfe: w.medianWfe === null ? 0 : Number(w.medianWfe.toFixed(3)),
+    outOfSampleTrades: w.totalOosTrades,
+  };
+
+  if (w.verdict === 'n/a') {
+    return {
+      ...base,
+      status: 'n/a',
+      detail: w.explanation,
+      inconclusiveReason: w.inconclusiveReason ?? w.explanation,
+      evidence,
+    };
+  }
+
+  return { ...base, status: w.verdict, detail: w.explanation, evidence };
 }

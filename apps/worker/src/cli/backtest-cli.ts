@@ -477,7 +477,7 @@ function printRun(label: string, runId: string, run: OrchestratedRun, warningCou
 
   console.log(
     `   ${'Bars / runtime'.padEnd(20)} ${String(run.engineResult.stats.barsProcessed)} bars, ` +
-      `engine ${String(run.engineMs)}ms, total ${String(run.totalMs)}ms`,
+      `engine ${String(run.engineMs)}ms (setup ${String(run.engineResult.stats.setupMs)}ms, exec ${String(run.engineResult.stats.executeMs)}ms), total ${String(run.totalMs)}ms`,
   );
   if (warningCount > 0) {
     console.log(`   ${'Compatibility'.padEnd(20)} ${String(warningCount)} warning(s)`);

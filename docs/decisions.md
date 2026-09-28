@@ -1398,3 +1398,69 @@ out of sample; just not a headline number that means nothing.
 
 Regime mix per segment is still to come with step 5 (A30), so a regime shift between the halves is
 not mistaken for overfitting.
+
+## A33 · A3 settled: transpile is not worth caching
+
+A3 said to measure transpile against run before building walk-forward, and to transpile once per
+worker thread if `runPretranspiled` accepts an inputs map. Measured, on `rsi-mean-reversion`,
+EURUSD H1, by splitting engine time into setup (parse, transpile, overrides, seam installation — no
+bars, no I/O) and execution:
+
+| window            | bars  | setup | execute |
+| ----------------- | ----- | ----- | ------- |
+| 2022-01 .. 2022-02 | 506   | 15ms  | 60ms    |
+| 2022-01 .. 2022-04 | 1,539 | 12ms  | 94ms    |
+| 2022-01 .. 2022-07 | 3,099 | 14ms  | 168ms   |
+
+Setup is FLAT at ~14ms and does not grow with the window. Execution fits ~39ms fixed plus
+**0.042ms per bar**. So a run costs about `53ms + 0.042 x bars`, and caching the transpile would save
+14ms of it.
+
+**Not worth doing, and not for the reason A3 anticipated.** The saving is real but small — 14ms
+against 187ms on a six-month H1 run, and walk-forward at four folds is eight runs, so about 110ms
+total. Against that, `runPretranspiled` bypasses the instrumentation seam entirely (recorded in
+`docs/pinets-notes.md` under open questions), which means no order log and no warmup gate. The order
+log is what A23 reads stop and target levels from and what A28 classifies fills with; the gate is
+what makes each fold's warmup honest. Trading those for 110ms would break the checks walk-forward
+exists to serve.
+
+`setupMs` and `executeMs` are now reported in `EngineStats` and printed by `pnpm backtest`, so the
+next person asking this question measures rather than re-derives.
+
+## A34 · Walk-forward
+
+Rolling, not anchored: the in-sample window is a fixed width that moves forward, so every fold is
+fitted on the same amount of data. An anchored window grows, and later folds would then be fitted on
+more history than earlier ones — the thing being measured would change as the measurement proceeded.
+
+Layout is `folds + ratio` equal blocks; fold i trains on blocks [i, i+ratio) and tests on block
+i+ratio. Four folds at a 3:1 ratio. Four rather than ten because each fold is two engine runs and,
+more importantly, because a finer layout produces test windows too small to hold enough trades — at
+which point the check reports `n/a` and has said nothing. The fold count is a statement about trade
+frequency, not statistical power.
+
+**This settles the open question the repo has carried since slice D began**: a structurally short
+walk-forward segment reports `n/a`, never `fail`. A fold that produced three trades has not tested
+anything, and failing it would punish a strategy for the fold layout rather than for its behaviour.
+Two `n/a` cases: fewer than two assessable folds, and no fold that trained profitably at all —
+nothing there is overfitted because nothing was fitted.
+
+WFE follows A24 exactly: null when the in-sample return is not strictly positive, and flagged
+unstable below a 1% in-sample return, with the median taken over stable folds only so a 20x outlier
+from a near-zero denominator cannot drag the summary.
+
+**Measured on real data, and it disagrees with the single OOS split in BOTH directions**, which is
+the argument for keeping both:
+
+| fixture             | OOS split | walk-forward                      |
+| ------------------- | --------- | --------------------------------- |
+| rsi-mean-reversion  | **pass**  | **warn** — 1 of 2 folds, WFE -0.07 |
+| supertrend-atr      | **fail**  | **warn** — 3 of 4 folds, WFE 0.45  |
+| bollinger-breakout  | **fail**  | **fail** — 1 of 3 folds, WFE -0.12 |
+
+`supertrend-atr` fails a single split but holds in three folds of four while keeping under half its
+in-sample return — the split landed on one bad window. `rsi-mean-reversion` is the reverse: it passes
+the single split and holds in only one fold of two. One split can survive, or fail, by luck; rolling
+folds are what tell the two apart.
+
+A full validation is now 13 checks and about 30 engine runs, in 2.6s on six months of H1.

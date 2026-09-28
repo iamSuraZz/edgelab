@@ -12,3 +12,4 @@ export * from './prefix-invariance';
 export * from './future-splice';
 export * from './bid-ask-asymmetry';
 export * from './fill-audit';
+export * from './walk-forward';
