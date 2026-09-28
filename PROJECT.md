@@ -95,7 +95,7 @@ pnpm run import:file mt5 EURUSD <abs.csv> 120        # 120 = broker server UTC o
 
 ## Current status — NOT v1.0
 
-Green: `build` 9/9, `typecheck` 16/16, `lint` clean, **895 tests** (`pnpm test`).
+Green: `build` 9/9, `typecheck` 16/16, `lint` clean, **905 tests** (`pnpm test`).
 CI runs all five checks on every push — see `.github/workflows/ci.yml`.
 
 **Verified against the real docker stack:**
@@ -170,8 +170,10 @@ roadmap's "in the browser" is NOT met.
 | CI on the public repo (A9)                                         | see badge / Actions tab      |
 | Exness imports + MT5 parity test (A12)                             | **NOT PLANNED** — no exports |
 
-**Execution bias, the OOS split (A32) and walk-forward (A34) are done and verified.** Still to build
-in step 1, in this order: **sealed holdout** (A17), timeframe matrix + regimes, and Monte Carlo. Each must run through `pnpm validate` on the 2022 data before the next
+**Execution bias, the OOS split (A32), rolling out-of-sample (A34) and walk-forward optimisation
+(A35) are done and verified. The sealed holdout's SEAL is enforced and proven (A37); its CLI and
+report line are not built.** Still to build in step 1: finish the holdout, then timeframe matrix +
+regimes, and Monte Carlo. Each must run through `pnpm validate` on the 2022 data before the next
 starts. A24 records four constraints agreed ahead of those steps; A26 (trailing-stop replay), A30
 (regime mix in the OOS report) and A31 (spread on resting fills from the replay) are post-slice-D
 follow-ups.
@@ -200,6 +202,17 @@ before the ratio, so 1.0 means the same earning rate. This flipped `supertrend-a
 from warn to **pass**: 0.45 was the layout, 1.36 is the strategy.
 
 A full validation is now **13 checks, ~30 engine runs, 2.6s** on six months of H1.
+
+**The sealed holdout is enforced at `readM1` (A37)** — the one function every reader goes through, so
+the Studio's date presets, the backtest job, the validation runner and the optimiser are all sealed
+by construction rather than by remembering. Overlapping reads are TRUNCATED, not refused; sealed bars
+require `readM1Unsealed`, which counts the view before returning anything. Proven on EURUSD 2022 H1
+at a 20% holdout: 185,122 bars unsealed, **147,580 sealed** (37,542 withheld), 0 bars for a read
+wholly inside the seal, and the view counter going 0 -> 1 on a deliberate unseal. `test:e2e` stays
+25/25 because an unsealed symbol reads exactly as before.
+
+> **Left to finish:** the `pnpm holdout` CLI (seal / status / drop) and a validation check that
+> reports "holdout viewed N times" in the report rather than only in the database.
 
 **Walk-forward OPTIMIZATION is built and opt-in (A35)** — `pnpm optimize <runId> --inputs` prints the
 setup form prefilled from the script's `InputSpec`, `--spec <file>` runs it. Up to three inputs, an
