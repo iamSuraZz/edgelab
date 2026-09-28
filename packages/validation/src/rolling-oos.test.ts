@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { SegmentMetrics } from './oos-split';
-import { analyseWalkForward, foldWindows } from './walk-forward';
+import { analyseRollingOos, foldWindows } from './rolling-oos';
 
 /**
  * Walk-forward asks the persistence question repeatedly, so the thing it must not do is let a
@@ -51,9 +51,9 @@ describe('foldWindows', () => {
   });
 });
 
-describe('analyseWalkForward — verdicts', () => {
+describe('analyseRollingOos — verdicts', () => {
   it('passes when the edge holds in most folds', () => {
-    const r = analyseWalkForward({ folds: [held, held, held, lost] });
+    const r = analyseRollingOos({ folds: [held, held, held, lost] });
 
     expect(r.verdict).toBe('pass');
     expect(r.foldsWithEdge).toBe(4);
@@ -62,30 +62,30 @@ describe('analyseWalkForward — verdicts', () => {
   });
 
   it('fails when it reverses more often than it holds', () => {
-    const r = analyseWalkForward({ folds: [held, lost, lost, lost] });
+    const r = analyseRollingOos({ folds: [held, lost, lost, lost] });
 
     expect(r.verdict).toBe('fail');
     expect(r.explanation).toContain('not an edge that rolled forward');
   });
 
   it('warns when it holds, but not reliably', () => {
-    const r = analyseWalkForward({ folds: [held, held, lost, lost, held] });
+    const r = analyseRollingOos({ folds: [held, held, lost, lost, held] });
     expect(r.verdict).toBe('warn');
   });
 
   it('warns when folds survive but keep little of their in-sample return', () => {
     const thin = { inSample: seg({ returnPct: 10 }), outOfSample: seg({ returnPct: 1 }) };
-    const r = analyseWalkForward({ folds: [thin, thin, thin, thin] });
+    const r = analyseRollingOos({ folds: [thin, thin, thin, thin] });
 
     expect(r.medianWfe).toBeCloseTo(0.1, 9);
     expect(r.verdict).toBe('warn');
   });
 });
 
-describe('analyseWalkForward — n/a rather than fail', () => {
+describe('analyseRollingOos — n/a rather than fail', () => {
   it('is n/a when too few folds produced enough trades', () => {
     const tiny = { inSample: seg({ trades: 2 }), outOfSample: seg({ trades: 1 }) };
-    const r = analyseWalkForward({ folds: [held, tiny, tiny, tiny] });
+    const r = analyseRollingOos({ folds: [held, tiny, tiny, tiny] });
 
     expect(r.verdict).toBe('n/a');
     expect(r.inconclusiveReason).toContain('too fine for this strategy');
@@ -96,7 +96,7 @@ describe('analyseWalkForward — n/a rather than fail', () => {
       inSample: seg({ netProfit: -100, returnPct: -1 }),
       outOfSample: seg({ netProfit: -50, returnPct: -0.5 }),
     };
-    const r = analyseWalkForward({ folds: [noEdge, noEdge, noEdge] });
+    const r = analyseRollingOos({ folds: [noEdge, noEdge, noEdge] });
 
     expect(r.verdict).toBe('n/a');
     expect(r.explanation).toContain('nothing was');
@@ -104,20 +104,20 @@ describe('analyseWalkForward — n/a rather than fail', () => {
 
   it('does not count an unassessable fold as a failure', () => {
     const tiny = { inSample: seg({ trades: 2 }), outOfSample: seg({ trades: 1 }) };
-    const r = analyseWalkForward({ folds: [held, held, tiny] });
+    const r = analyseRollingOos({ folds: [held, held, tiny] });
 
     expect(r.foldsWithEdge).toBe(2);
     expect(r.verdict).toBe('pass');
   });
 });
 
-describe('analyseWalkForward — WFE', () => {
+describe('analyseRollingOos — WFE', () => {
   it('is null when the in-sample return was not positive', () => {
     const both = {
       inSample: seg({ netProfit: -500, returnPct: -5 }),
       outOfSample: seg({ netProfit: -200, returnPct: -2 }),
     };
-    const r = analyseWalkForward({ folds: [both, held, held] });
+    const r = analyseRollingOos({ folds: [both, held, held] });
 
     // -2 / -5 = 0.4 would read as "kept 40%" for a fold that lost money twice.
     expect(r.folds[0]!.wfe).toBeNull();
@@ -128,7 +128,7 @@ describe('analyseWalkForward — WFE', () => {
       inSample: seg({ returnPct: 0.1, netProfit: 10 }),
       outOfSample: seg({ returnPct: 2, netProfit: 200 }),
     };
-    const r = analyseWalkForward({ folds: [tinyEdge, held, held] });
+    const r = analyseRollingOos({ folds: [tinyEdge, held, held] });
 
     expect(r.folds[0]!.wfe).toBeCloseTo(20, 6);
     expect(r.folds[0]!.wfeStable).toBe(false);
@@ -141,7 +141,7 @@ describe('analyseWalkForward — WFE', () => {
     const b = { inSample: seg({ returnPct: 10 }), outOfSample: seg({ returnPct: 8 }) };
     const c = { inSample: seg({ returnPct: 10 }), outOfSample: seg({ returnPct: 9 }) };
 
-    const r = analyseWalkForward({ folds: [a, b, c] });
+    const r = analyseRollingOos({ folds: [a, b, c] });
     expect(r.medianWfe).toBeCloseTo(0.8, 9);
   });
 });

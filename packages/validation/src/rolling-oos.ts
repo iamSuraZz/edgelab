@@ -1,11 +1,19 @@
 import type { SegmentMetrics } from './oos-split';
 
 /**
- * Walk-forward analysis (spec 06 §3).
+ * Rolling out-of-sample with FIXED parameters.
  *
- * The out-of-sample split (A32) asks the persistence question once. Walk-forward asks it repeatedly,
- * rolling through the range, which answers a different and harder question: not "did the edge
- * survive into the last 30%" but "does it survive REPEATEDLY, or did it survive once by luck".
+ * The out-of-sample split (A32) asks the persistence question once. This asks it repeatedly, rolling
+ * through the range, which answers a different and harder question: not "did the edge survive into
+ * the last 30%" but "does it survive REPEATEDLY, or did it survive once by luck".
+ *
+ * THIS IS NOT WALK-FORWARD OPTIMIZATION, and the distinction is the whole point of the name. Every
+ * fold here runs the script's own input values unchanged. Nothing is selected in sample, so nothing's
+ * GENERALIZATION is being tested — only whether one fixed parameter set keeps working as the market
+ * moves. That is worth knowing and it is cheap, which is why it stays in the default suite; but a
+ * strategy whose inputs were tuned by hand on this very data will sail through it. Spec 06's
+ * walk-forward optimization, which fits parameters per fold and tests the WINNER out of sample, is a
+ * separate and far more expensive check (A35).
  *
  * ROLLING, not anchored. The in-sample window is a fixed width that moves forward, so every fold
  * is fitted on the same amount of data. An anchored window grows, which means later folds are fitted
@@ -27,7 +35,7 @@ import type { SegmentMetrics } from './oos-split';
  * Pure: the caller performs the runs and passes their metrics.
  */
 
-export interface WalkForwardFold {
+export interface RollingOosFold {
   readonly index: number;
   readonly inSample: SegmentMetrics;
   readonly outOfSample: SegmentMetrics;
@@ -49,10 +57,10 @@ export interface WalkForwardFold {
   readonly assessable: boolean;
 }
 
-export type WalkForwardVerdict = 'pass' | 'warn' | 'fail' | 'n/a';
+export type RollingOosVerdict = 'pass' | 'warn' | 'fail' | 'n/a';
 
-export interface WalkForwardResult {
-  readonly folds: readonly WalkForwardFold[];
+export interface RollingOosResult {
+  readonly folds: readonly RollingOosFold[];
   readonly assessableFolds: number;
   readonly foldsWithEdge: number;
   readonly foldsSurviving: number;
@@ -62,12 +70,12 @@ export interface WalkForwardResult {
   readonly medianWfe: number | null;
   /** Total out-of-sample trades across assessable folds. */
   readonly totalOosTrades: number;
-  readonly verdict: WalkForwardVerdict;
+  readonly verdict: RollingOosVerdict;
   readonly explanation: string;
   readonly inconclusiveReason: string | null;
 }
 
-export interface WalkForwardParams {
+export interface RollingOosParams {
   readonly folds: readonly {
     readonly inSample: SegmentMetrics;
     readonly outOfSample: SegmentMetrics;
@@ -81,11 +89,11 @@ export interface WalkForwardParams {
 const DEFAULT_MIN_TRADES = 5;
 const DEFAULT_MIN_STABLE_RETURN_PCT = 1;
 
-export function analyseWalkForward(params: WalkForwardParams): WalkForwardResult {
+export function analyseRollingOos(params: RollingOosParams): RollingOosResult {
   const minTrades = params.minTradesPerSegment ?? DEFAULT_MIN_TRADES;
   const minStable = params.minStableReturnPct ?? DEFAULT_MIN_STABLE_RETURN_PCT;
 
-  const folds: WalkForwardFold[] = params.folds.map((f, index) => {
+  const folds: RollingOosFold[] = params.folds.map((f, index) => {
     const assessable = f.inSample.trades >= minTrades && f.outOfSample.trades >= minTrades;
     const isReturn = f.inSample.returnPct;
     const oosReturn = f.outOfSample.returnPct;

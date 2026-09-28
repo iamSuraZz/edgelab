@@ -9,10 +9,10 @@ import {
   auditFills,
   analyseCostStress,
   analyseOosSplit,
-  analyseWalkForward,
+  analyseRollingOos,
   foldWindows,
   splitInstant,
-  type WalkForwardResult,
+  type RollingOosResult,
   type OosSplitResult,
   type SegmentMetrics,
   checkBidAskAsymmetry,
@@ -128,8 +128,8 @@ const OOS_SPLIT_FRACTION = 0.7;
  * `n/a` and has told you nothing. The fold count is a statement about trade frequency, not about
  * statistical power.
  */
-const WALK_FORWARD_FOLDS = 4;
-const WALK_FORWARD_IS_RATIO = 3;
+const ROLLING_OOS_FOLDS = 4;
+const ROLLING_OOS_IS_RATIO = 3;
 
 /**
  * How much of the future to replace, sized to the longest timeframe the script actually requests.
@@ -167,7 +167,7 @@ export interface ValidationReport {
   readonly replay: IntrabarReplayResult | null;
   readonly stress: CostStressResult | null;
   readonly oos: OosSplitResult | null;
-  readonly walkForward: WalkForwardResult | null;
+  readonly rollingOos: RollingOosResult | null;
   readonly elapsedMs: number;
 }
 
@@ -613,12 +613,12 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
 
   /* ----------------------------------------- walk-forward (spec 06 §3) */
 
-  report(97, 'walk-forward');
+  report(97, 'rolling out-of-sample');
 
   // Rolling folds, each half its own run from the same starting capital — the same A24 reasoning as
   // the OOS split, applied repeatedly. Cost is known rather than guessed (A3): setup is a flat
   // ~14ms and execution ~39ms + 0.042ms/bar, so these 2N runs are affordable at this fold count.
-  const windows = foldWindows(run.fromMs, run.toMs, WALK_FORWARD_FOLDS, WALK_FORWARD_IS_RATIO);
+  const windows = foldWindows(run.fromMs, run.toMs, ROLLING_OOS_FOLDS, ROLLING_OOS_IS_RATIO);
 
   const foldMetrics = [];
   for (const w of windows) {
@@ -628,7 +628,7 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
     });
   }
 
-  const walkForward = analyseWalkForward({ folds: foldMetrics });
+  const rollingOos = analyseRollingOos({ folds: foldMetrics });
 
   /* --------------------------------------------------------- the checks */
 
@@ -644,7 +644,7 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
     replayResult(replay),
     costStressResult(stress),
     oosResult(oos),
-    walkForwardResult(walkForward),
+    rollingOosResult(rollingOos),
     ...runChecks(BUILT_IN_CHECKS, {
       bars: full.engineResult.bars,
       timeframe,
@@ -698,7 +698,7 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
     replay,
     stress,
     oos,
-    walkForward,
+    rollingOos,
     elapsedMs: Date.now() - startedAt,
   };
 }
@@ -1393,10 +1393,10 @@ function oosResult(o: OosSplitResult): CheckResult {
 }
 
 /** Walk-forward as a verdict. */
-function walkForwardResult(w: WalkForwardResult): CheckResult {
+function rollingOosResult(w: RollingOosResult): CheckResult {
   const base = {
-    id: 'overfitting-walk-forward',
-    label: 'Walk-forward',
+    id: 'overfitting-rolling-oos',
+    label: 'Rolling out-of-sample (fixed parameters)',
     severity: 'critical' as const,
   };
 
