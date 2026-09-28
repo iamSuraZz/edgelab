@@ -95,7 +95,7 @@ pnpm run import:file mt5 EURUSD <abs.csv> 120        # 120 = broker server UTC o
 
 ## Current status — NOT v1.0
 
-Green: `build` 9/9, `typecheck` 16/16, `lint` clean, **840 tests** (`pnpm test`).
+Green: `build` 9/9, `typecheck` 16/16, `lint` clean, **843 tests** (`pnpm test`).
 CI runs all five checks on every push — see `.github/workflows/ci.yml`.
 
 **Verified against the real docker stack:**
@@ -200,8 +200,12 @@ the stress re-runs matches the metrics report's analytical figure **exactly** on
 (0.84 pips/side either way, break-even at 5.22x costs). Switching slippage on exposed that
 `slippagePoints` was **never passed to the engine**: total costs rose from 355 to 3,025 while net
 profit did not move, because the waterfall attributed a cost the engine had never charged. Fixed by
-passing it as a strategy prop — the same run then went from +1,499.61 to -1,588.05. Measured while
-fixing it: PineTS charges slippage on BOTH legs, including limit exits, unlike TradingView.
+passing it as a strategy prop — the same run then went from +1,499.61 to -1,588.05. **Slippage is now measured per fill (A28)**, not
+computed from `2 x slippagePoints x mintick`, so the costs shown equal the costs charged by
+construction. That measurement settled a question an aggregate could not: **PineTS slips LIMIT fills**
+(15.00 ticks on all of market, stop and limit against a 0.00-tick control), where TradingView never
+slips a limit order. Recorded in `docs/pinets-notes.md` and surfaced as a `divergent-strategy-prop`
+warning — not an "ignored prop" one, since the prop is applied.
 
 **Stop and target levels now come from the ORDER LOG, not from clustering exit prices (A23), and are
 paired per exit id (A25).** A `partial-exits` fixture with two simultaneous brackets replays 998 of
