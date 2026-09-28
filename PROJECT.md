@@ -95,7 +95,7 @@ pnpm run import:file mt5 EURUSD <abs.csv> 120        # 120 = broker server UTC o
 
 ## Current status — NOT v1.0
 
-Green: `build` 9/9, `typecheck` 16/16, `lint` clean, **733 tests** (`pnpm test`).
+Green: `build` 9/9, `typecheck` 16/16, `lint` clean, **776 tests** (`pnpm test`).
 CI runs all five checks on every push — see `.github/workflows/ci.yml`.
 
 **Verified against the real docker stack:**
@@ -170,10 +170,23 @@ roadmap's "in the browser" is NOT met.
 | CI on the public repo (A9)                                         | see badge / Actions tab      |
 | Exness imports + MT5 parity test (A12)                             | **NOT PLANNED** — no exports |
 
-Still to build in step 1, in this order: the rest of **execution bias** (M1 ambiguity replay,
-bid/ask asymmetry, cost stress), then OOS split, walk-forward (A3 timing first), **sealed holdout**
-(A17), timeframe matrix + regimes, and Monte Carlo. Each must run through `pnpm validate` on the 2022
-data before the next starts.
+Still to build in step 1, in this order: **M1 ambiguity replay** and **cost stress** (the rest of
+execution bias), then OOS split, walk-forward (A3 timing first), **sealed holdout** (A17), timeframe
+matrix + regimes, and Monte Carlo. Each must run through `pnpm validate` on the 2022 data before the
+next starts.
+
+**Price basis is now explicit per feed (A19).** `bid` for Dukascopy and MT5 imports, `mid` for Twelve
+Data, `last` for Binance klines (trade prints, treated as mid, labelled separately). `deriveQuotes`
+is the one function that turns a stored price plus a spread into a bid and an ask; the cost overlay,
+the asymmetry check and — next — the M1 replay all read it. The basis is derived from the run's feed,
+never configured, because the feed guard already refuses a run that straddles two.
+
+**The EURUSD.twelvedata cost total did not move, which is the correct result** — that feed carries no
+per-bar spread (0 of 738,570 bars), so half at entry plus half at exit equals a full spread at one
+leg. The basis changes WHERE a cost lands, not how much, until the spread or the FX rate differs
+between the two fills; on a fixture whose bars carry 0.00008 and 0.0002 the same long costs $8 on bid
+and $14 on mid. **The mid-vs-bid error was never worth money in the cost total — it is worth money in
+the price LEVELS, and that is where the asymmetry check finds it.**
 
 > **The acceptance feed was 11% short and it was our fault (A14).** Twelve Data omits volume for
 > forex, so D4's "flat AND zero-volume" rule collapsed to "drop every flat bar" and deleted 73,850
@@ -181,6 +194,12 @@ data before the next starts.
 > minutes than the bid feed over the window they share. **Still open: this feed is MID, not bid**
 > (+0.65x spread above the bid feed), and the cost overlay assumes bid — so its cost attribution is
 > wrong on this feed even though the total is close.
+
+**Bid/ask asymmetry is done and verified on both feeds (A20)**, and it discriminates: on the
+dukascopy bid feed all 89 level exits are flattered by $99.07, entirely on the shorts, with no
+outcome changed; on the twelvedata mid feed **10 of 361 level exits would not have triggered at all**
+on the side of the book they actually fill on. A flipped outcome is a `fail`, the level error alone a
+`warn`. Which exits rest in the book is read from the source (`strategy.exit` ids), not guessed.
 
 The **fill audit** is done and verified: 1,096 fills on the clean fixture all sit inside their bar and
 all landed on a bar open — independent evidence for next-bar-open execution — while
@@ -204,11 +223,13 @@ keeping both layers: truncation covers unbounded leaks, splicing covers bounded 
 | `lookahead.ts` causality (A1a)                            | done, 14 tests, **unwired** |
 | `static-lint.ts` — tokenizer, line numbers                | done, 18 tests              |
 | `prefix-invariance.ts` — cutoffs + margin (A1)            | done, 16 tests              |
-| `same-bar.ts` estimate (A5)                               | done, 11 tests              |
+| `same-bar.ts` estimate (A5)                               | done, 13 tests              |
+| `price-basis.ts` (A19) — one derivation, three consumers  | done, 16 tests              |
 | A2 statuses `pass/warn/fail/n·a` + Inconclusive verdict   | done                        |
 | `validateRun` + `pnpm validate <runId>`                   | done, run on the real stack |
 | **Future-splice (A1b)** — the layer that catches the leak | done, 15 tests, verified    |
-| Execution bias (fill audit, intrabar, cost stress)        | **not started**             |
+| Fill audit + **bid/ask asymmetry (A20)**                  | done, verified on real data |
+| Execution bias remainder (M1 replay, cost stress)         | **not started**             |
 | OOS split, walk-forward, sealed holdout                   | **not started**             |
 | Timeframe matrix, regimes, Monte Carlo                    | **not started**             |
 | `POST /backtests/:id/validate` + SSE (step 2)             | **not started**             |

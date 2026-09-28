@@ -923,12 +923,12 @@ That is true of Dukascopy and of MT5-style broker exports, and false of Twelve D
 about half a spread above the bid feed over the same minutes. A19 makes the basis explicit and
 carries it through the run.
 
-| source              | basis  | why                                                          |
-| ------------------- | ------ | ------------------------------------------------------------ |
-| dukascopy, mt5, exness | `bid` | quote feeds, bid side                                       |
-| twelvedata          | `mid`  | measured +0.65x spread above the bid feed over 185k shared minutes |
-| binance             | `last` | klines are TRADE prints, not quotes at all                   |
-| anything else       | `bid`  | assumed, and reported as assumed                             |
+| source                 | basis  | why                                                                |
+| ---------------------- | ------ | ------------------------------------------------------------------ |
+| dukascopy, mt5, exness | `bid`  | quote feeds, bid side                                              |
+| twelvedata             | `mid`  | measured +0.65x spread above the bid feed over 185k shared minutes |
+| binance                | `last` | klines are TRADE prints, not quotes at all                         |
+| anything else          | `bid`  | assumed, and reported as assumed                                   |
 
 **Binance is `last`, treated as mid, and kept as its own label.** A spot kline is the last trade of
 the minute; trades print at whichever side of the book they hit, so over a bar they land on both
@@ -984,10 +984,10 @@ resolved statically, so those exits are skipped and counted rather than assumed 
 
 Verified on the 2022–2023 acceptance data, `rsi-mean-reversion`, H1, both feeds:
 
-| feed                     | basis | level exits | total error | flips |
-| ------------------------ | ----- | ----------- | ----------- | ----- |
-| EURUSD (dukascopy)       | bid   | 89          | $99.07      | 0     |
-| EURUSD.twelvedata        | mid   | 361         | —           | **10** |
+| feed               | basis | level exits | total error | flips  |
+| ------------------ | ----- | ----------- | ----------- | ------ |
+| EURUSD (dukascopy) | bid   | 89          | $99.07      | 0      |
+| EURUSD.twelvedata  | mid   | 361         | —           | **10** |
 
 The bid feed behaves exactly as predicted: the entire error lands on the shorts, long levels are
 exact, and nothing flips. The mid feed fails: **10 of 361 level exits would not have triggered at
