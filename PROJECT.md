@@ -95,7 +95,7 @@ pnpm run import:file mt5 EURUSD <abs.csv> 120        # 120 = broker server UTC o
 
 ## Current status — NOT v1.0
 
-Green: `build` 9/9, `typecheck` 16/16, `lint` clean, **932 tests** (`pnpm test`).
+Green: `build` 9/9, `typecheck` 16/16, `lint` clean, **945 tests** (`pnpm test`).
 CI runs all five checks on every push — see `.github/workflows/ci.yml`.
 
 **Verified against the real docker stack:**
@@ -171,8 +171,9 @@ roadmap's "in the browser" is NOT met.
 | Exness imports + MT5 parity test (A12)                             | **NOT PLANNED** — no exports |
 
 **Execution bias, the OOS split (A32), rolling out-of-sample (A34), walk-forward optimisation (A35)
-the sealed holdout (A37-A39) and the REGIME classifier (A41/A42) are all done and verified.** Still
-to build in step 1: the timeframe matrix, then Monte Carlo. Each must run through `pnpm validate` on the 2022 data before the next
+the sealed holdout (A37-A39), the regime classifier (A41/A42) and the TIMEFRAME MATRIX (A44) are all
+done and verified.** **Monte Carlo is the last check in step 1** — its reshuffle rule is recorded as
+A43. Then step 2 (endpoint + SSE) and step 3 (Integrity tab). Each must run through `pnpm validate` on the 2022 data before the next
 starts. A24 records four constraints agreed ahead of those steps; A26 (trailing-stop replay), A30
 (regime mix in the OOS report) and A31 (spread on resting fills from the replay) are post-slice-D
 follow-ups.
