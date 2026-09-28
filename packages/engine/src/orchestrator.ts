@@ -8,7 +8,7 @@ import type {
   SymbolSpec,
   AccountMoney,
 } from '@edgelab/shared';
-import { ZERO_COSTS } from '@edgelab/shared';
+import { ZERO_COSTS, priceBasisForSource } from '@edgelab/shared';
 
 import { applyCosts, resolveQuoteToAccount, type QuoteToAccount } from './costs';
 import {
@@ -151,12 +151,19 @@ export async function orchestrateRun(params: OrchestrateParams): Promise<Orchest
   );
 
   report(45, 'applying costs');
+  // The feed decides what a stored price means, and therefore which fill pays the spread. The run
+  // already knows its single source (the feed guard refuses a run that straddles two), so this is
+  // derived rather than configured — a basis the operator could set by hand would eventually be set
+  // wrong for the feed underneath it.
+  const basis = priceBasisForSource(params.source);
+
   const costed = applyCosts({
     trades: engineResult.trades,
     bars: engineResult.bars,
     symbol: params.symbol,
     config: params.costs,
     quoteToAccount,
+    basis,
   });
 
   report(60, 'reconstructing equity');

@@ -9,6 +9,7 @@ export * from './timeframes';
 export * from './feeds';
 export * from './units';
 export * from './market';
+export * from './price-basis';
 export * from './symbols';
 export * from './metrics-dictionary';
 export * from './costs';

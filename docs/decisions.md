@@ -915,3 +915,85 @@ type boundary rather than a comment.
 
 Metric OUTPUTS are still plain numbers. That surface is large and every field is account money, so
 it buys much less than the input side did; not done, and deliberately.
+
+## A19 · Price basis is a property of the feed
+
+Every stored price is one number, and until now the whole codebase assumed that number was the BID.
+That is true of Dukascopy and of MT5-style broker exports, and false of Twelve Data, whose closes sit
+about half a spread above the bid feed over the same minutes. A19 makes the basis explicit and
+carries it through the run.
+
+| source              | basis  | why                                                          |
+| ------------------- | ------ | ------------------------------------------------------------ |
+| dukascopy, mt5, exness | `bid` | quote feeds, bid side                                       |
+| twelvedata          | `mid`  | measured +0.65x spread above the bid feed over 185k shared minutes |
+| binance             | `last` | klines are TRADE prints, not quotes at all                   |
+| anything else       | `bid`  | assumed, and reported as assumed                             |
+
+**Binance is `last`, treated as mid, and kept as its own label.** A spot kline is the last trade of
+the minute; trades print at whichever side of the book they hit, so over a bar they land on both
+sides and the mid is the honest approximation. It is not folded into `mid` because a report should
+be able to say "last-traded prices, treated as mid" rather than claim a quote we never received. An
+unknown feed falls back to `bid`, which is the conservative direction for a cost model — it charges a
+buyer the full spread — and `describeBasis` says the basis was assumed rather than declared.
+
+One function does the derivation: `deriveQuotes(bar, basis, spread)`, with `quoteFor` for a single
+level. The invariant `ask - bid === spread` holds on every basis and is asserted on every field. The
+spread itself still comes from the cost overlay's `spreadPriceAt`, so per-bar spreads, the configured
+figure and the symbol default all keep working unchanged.
+
+The basis is DERIVED from the run's feed, never configured. The feed guard (A6) already refuses a run
+that straddles two sources and returns the single one, so a basis set by hand could only ever drift
+away from the data underneath it.
+
+**Three consumers.** The cost overlay charges `spreadShare(basis, side)`: a bid feed charges the
+whole spread on the buying leg (long at entry, short at exit — exactly what it did before), a mid
+feed charges half on every fill. A round trip still costs exactly one spread on every basis. The
+asymmetry check uses the same arithmetic for levels. The M1 replay will use `fillSide` — sells
+trigger on the bid, buys on the ask.
+
+**The EURUSD.twelvedata cost breakdown did not move, and that is the correct result.**
+
+    before   143 trades   spread 1136.00   longs 568.00   shorts 568.00   per trade 1.62 .. 8.00
+    after    143 trades   spread 1136.00   longs 568.00   shorts 568.00   per trade 1.62 .. 8.00
+
+This feed carries no per-bar spread at all — 0 of 738,570 bars — so every bar falls back to the same
+0.8-point default, and half at entry plus half at exit equals a full spread at one leg. The basis
+moves WHERE a cost is charged, not how much, whenever the spread and the FX rate are identical at
+both fills. It diverges as soon as they are not: on the test fixture, whose bars carry 0.00008 at
+entry and 0.0002 at exit, one long costs $8 on a bid basis and $14 on a mid basis.
+
+So the mid-vs-bid error was never worth money in the cost TOTAL. It was worth money in the price
+LEVELS, which is where the asymmetry check now finds it.
+
+## A20 · Bid/ask asymmetry at stop and target levels
+
+A resting order triggers when a QUOTE reaches it, not when the stored price does. A long exits by
+SELLING, so its stop and target trigger on the bid; a short exits by BUYING, so its levels trigger on
+the ask. The engine has one number per bar and triggers everything off it.
+
+The error is ALWAYS adverse: a target gets harder to reach and a stop gets easier, on both sides, on
+every basis. The spread never pays you. That is what makes it worth a check rather than a footnote —
+a backtest flattered by targets that filled is flattered in a direction that is knowable.
+
+Which exits are levels is read from the SOURCE, not guessed from prices. A trade's exit reason is the
+id of the order that closed it: a reversal closes with the opposing ENTRY's id (`Long`/`Short` in our
+fixtures), a bracket with its own (`Bracket`). `levelExitIdsFromSource` pulls the ids out of every
+`strategy.exit` call, with comments and strings blanked first. An id given as a variable cannot be
+resolved statically, so those exits are skipped and counted rather than assumed to be levels.
+
+Verified on the 2022–2023 acceptance data, `rsi-mean-reversion`, H1, both feeds:
+
+| feed                     | basis | level exits | total error | flips |
+| ------------------------ | ----- | ----------- | ----------- | ----- |
+| EURUSD (dukascopy)       | bid   | 89          | $99.07      | 0     |
+| EURUSD.twelvedata        | mid   | 361         | —           | **10** |
+
+The bid feed behaves exactly as predicted: the entire error lands on the shorts, long levels are
+exact, and nothing flips. The mid feed fails: **10 of 361 level exits would not have triggered at
+all** on the side of the book they actually fill on — e.g. trade 83's short target at 1.0561 needed
+the stored price to reach 1.05606. Those trades are not merely mispriced, they did not happen, which
+is why a flip is a `fail` and the level error alone is a `warn`.
+
+A flip is scored only for TARGETS. A stop moves in the direction that makes it trigger sooner, so it
+always still triggers — adverse, but not an outcome that can vanish.

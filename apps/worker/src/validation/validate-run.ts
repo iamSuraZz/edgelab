@@ -1,5 +1,5 @@
 import { findSymbolByCode, listSymbols, readM1, readRun, type DbClient } from '@edgelab/db';
-import { PineTsEngine, orchestrateRun, parsePineTimeframe } from '@edgelab/engine';
+import { PineTsEngine, orchestrateRun, parsePineTimeframe, spreadPriceAt } from '@edgelab/engine';
 import type { SecurityCall } from '@edgelab/engine';
 import { resample } from '@edgelab/data';
 import {
@@ -7,6 +7,9 @@ import {
   bucketsFromCandles,
   checkCausality,
   auditFills,
+  checkBidAskAsymmetry,
+  levelExitIdsFromSource,
+  type AsymmetryResult,
   cutoffsFor,
   estimateSameBarBias,
   pickDonor,
@@ -27,6 +30,8 @@ import {
 } from '@edgelab/validation';
 import {
   accountMoney,
+  describeBasis,
+  priceBasisForSource,
   CostConfigSchema,
   DEFAULT_COSTS,
   timeframeMs,
@@ -105,6 +110,7 @@ export interface ValidationReport {
   readonly lint: LintResult;
   readonly prefix: PrefixInvarianceResult | null;
   readonly sameBar: SameBarBiasEstimate | null;
+  readonly asymmetry: AsymmetryResult | null;
   readonly elapsedMs: number;
 }
 
@@ -141,13 +147,19 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
   const warmupMs = run.warmupBars * tfMs;
   const barsFromMs = run.fromMs - warmupMs;
 
-  await assertSingleFeed({
+  // The single feed is also what decides the price basis — what a stored number MEANS, and so
+  // which side of the book a resting order really triggers on.
+  const feedSource = await assertSingleFeed({
     db: params.db,
     symbolId: symbolRow.id,
     symbolCode: run.symbol,
     fromMs: run.fromMs,
     toMs: run.toMs,
   });
+  // `assertSingleFeed` returns null only when the range holds no bars at all, which later
+  // checks refuse on their own terms. Bid is the conservative basis to assume meanwhile.
+  const feed = feedSource ?? 'unknown';
+  const basis = priceBasisForSource(feed);
 
   const m1 = await readM1(params.db, symbolRow.id, barsFromMs, run.toMs);
   const knownSymbols = new Set((await listSymbols(params.db)).map((r) => r.symbol.toUpperCase()));
@@ -323,6 +335,34 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
     valuePerTickPerLot: symbolRow.mintick * symbolRow.contractSize * symbolRow.pointValue,
   });
 
+  /* ------------------------------------------ bid/ask asymmetry (spec 06 §2) */
+
+  // Which exits rested in the book, read from the SOURCE rather than guessed from prices: a
+  // reversal closes with the opposing entry's id, a bracket with its own.
+  const levelExitIds = levelExitIdsFromSource(run.pineSource);
+  const costConfig = CostConfigSchema.parse(run.costs ?? DEFAULT_COSTS);
+
+  const asymmetry = checkBidAskAsymmetry({
+    trades: full.trades.map((t, i) => ({
+      seq: i + 1,
+      side: t.side,
+      qty: t.qty,
+      entryPrice: t.entryPrice,
+      exitPrice: t.exitPrice,
+      exitBar: t.exitBar,
+      netPnl: t.netPnl,
+    })),
+    bars: full.engineResult.bars,
+    basis,
+    spreadAt: (barIndex) => spreadPriceAt(full.engineResult.bars[barIndex], symbolRow, costConfig),
+    // One price unit on one LOT, in the account currency.
+    valuePerPricePerLot: symbolRow.contractSize * symbolRow.pointValue,
+    isLevelExit: (seq) => {
+      const reason = full.trades[seq - 1]?.exitReason;
+      return reason != null && levelExitIds.has(reason);
+    },
+  });
+
   /* --------------------------------------------------------- the checks */
 
   report(90, 'judging');
@@ -333,6 +373,7 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
     spliceResult(splice, cutoffs.length, spliceSkipped, spliceWindowMs),
     causality,
     fillAuditResult(fills, symbolRow.mintick),
+    asymmetryResult(asymmetry, feed),
     ...runChecks(BUILT_IN_CHECKS, {
       bars: full.engineResult.bars,
       timeframe,
@@ -374,6 +415,7 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
     lint,
     prefix,
     sameBar,
+    asymmetry,
     elapsedMs: Date.now() - startedAt,
   };
 }
@@ -844,4 +886,73 @@ function toSpec(
   row: Awaited<ReturnType<typeof findSymbolByCode>>,
 ): Parameters<typeof orchestrateRun>[0]['symbol'] {
   return row as unknown as Parameters<typeof orchestrateRun>[0]['symbol'];
+}
+
+/**
+ * The asymmetry check as a verdict.
+ *
+ * A flipped outcome is a FAIL: the trade did not merely cost a little more than reported, it did
+ * not happen. Everything else is a warning at most, because the level error is a modelling
+ * limitation of one-price-per-bar data rather than a defect in the run — real, quantified, and not
+ * something a different backtest of the same strategy would avoid.
+ */
+function asymmetryResult(a: AsymmetryResult, source: string): CheckResult {
+  const base = {
+    id: 'execution-bid-ask-asymmetry',
+    label: 'Execution (bid/ask asymmetry)',
+    severity: 'warning' as const,
+  };
+
+  const basisNote = describeBasis(source);
+
+  if (a.assessed === 0) {
+    return {
+      ...base,
+      status: 'n/a',
+      detail: `${a.explanation} Feed basis: ${basisNote}.`,
+      inconclusiveReason: a.explanation,
+    };
+  }
+
+  const evidence = {
+    basis: a.basis,
+    source,
+    levelExitsAssessed: a.assessed,
+    skipped: a.skipped,
+    totalAccountError: Number(a.totalAccountError.toFixed(2)),
+    meanAccountError: Number((a.meanAccountError ?? 0).toFixed(4)),
+    outcomeFlips: a.flips,
+  };
+
+  if (a.flips > 0) {
+    const worst = a.rows.filter((r) => r.outcomeFlips).slice(0, 3);
+    return {
+      ...base,
+      status: 'fail',
+      detail:
+        `${String(a.flips)} of ${String(a.assessed)} level exits would not have triggered at all ` +
+        `on the side of the book they actually fill on (${basisNote}). ` +
+        worst
+          .map(
+            (r) =>
+              `trade ${String(r.seq)} ${r.side} ${r.kind} at ${String(r.modelledPrice)} needed the ` +
+              `stored price to reach ${r.requiredStoredPrice.toFixed(5)}`,
+          )
+          .join('; ') +
+        `. ${a.explanation}`,
+      evidence,
+    };
+  }
+
+  return {
+    ...base,
+    status: a.totalAccountError > 0 ? 'warn' : 'pass',
+    detail:
+      a.totalAccountError > 0
+        ? `${String(a.assessed)} level exits are flattered by ${a.totalAccountError.toFixed(2)} in ` +
+          `total (${(a.meanAccountError ?? 0).toFixed(2)} per exit): every stop and target fills on ` +
+          `the far side of the spread. No outcome flips. ${a.explanation}`
+        : `${String(a.assessed)} level exits carry no bid/ask error. ${a.explanation}`,
+    evidence,
+  };
 }

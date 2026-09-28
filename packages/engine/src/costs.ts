@@ -1,6 +1,14 @@
 import { dailyLocalInstants, localClock } from '@edgelab/data';
-import { accountMoney, price, units, unitsToLots } from '@edgelab/shared';
-import type { Bar, CostConfig, CostedTrade, SymbolSpec, TradeSide, Units } from '@edgelab/shared';
+import { accountMoney, price, spreadShare, units, unitsToLots } from '@edgelab/shared';
+import type {
+  Bar,
+  CostConfig,
+  CostedTrade,
+  PriceBasis,
+  SymbolSpec,
+  TradeSide,
+  Units,
+} from '@edgelab/shared';
 
 import type { EngineTrade } from './pine-engine';
 
@@ -10,10 +18,11 @@ import type { EngineTrade } from './pine-engine';
  * The engine has already applied commission and slippage, because both move a fill price and
  * so change which orders pass a margin check. Two costs it cannot model are added here:
  *
- *  - **Spread.** Stored bars are BID prices, so a buy really transacts at bid + spread. One
- *    spread per round trip: a long pays it at its ENTRY bar (it bought at the ask and will
- *    sell at the bid), a short at its EXIT bar (it sold at the bid and will buy back at the
- *    ask). Charging it on both fills would double-count the round trip.
+ *  - **Spread.** What a stored price MEANS depends on the feed (`PriceBasis`). On a bid feed a buy
+ *    really transacts at bid + spread, so one spread is charged per round trip on the buying leg:
+ *    a long at its ENTRY bar, a short at its EXIT bar. On a mid feed neither leg is the stored
+ *    price and each pays half. Either way a round trip costs exactly one spread; charging both
+ *    fills in full would double-count it.
  *  - **Financing.** The engine has no calendar, so it cannot know how many rollovers a
  *    position was held through.
  *
@@ -220,6 +229,13 @@ export interface ApplyCostsParams {
   readonly symbol: SymbolSpec;
   readonly config: CostConfig;
   readonly quoteToAccount: QuoteToAccount;
+  /**
+   * What the stored prices represent. Decides WHICH fill pays the spread.
+   *
+   * Defaults to `bid`, which is what this overlay assumed unconditionally before feeds with a
+   * different basis were ingested. Passing it explicitly is what makes a mid feed cost correctly.
+   */
+  readonly basis?: PriceBasis;
 }
 
 /**
@@ -238,7 +254,7 @@ export interface ApplyCostsParams {
  * the true gross and then subtracted again in the waterfall. They are not charged twice.
  */
 export function applyCosts(params: ApplyCostsParams): CostedTrade[] {
-  const { trades, bars, symbol, config, quoteToAccount } = params;
+  const { trades, bars, symbol, config, quoteToAccount, basis = 'bid' } = params;
 
   const barByIndex = (index: number | null): Bar | undefined =>
     index === null || index < 0 ? undefined : bars[index];
@@ -254,13 +270,26 @@ export function applyCosts(params: ApplyCostsParams): CostedTrade[] {
     const positionUnits = units(trade.qty);
     const exitTime = trade.exitTime as number;
 
-    // One spread per round trip, charged on the side that bought at the ask.
-    const spreadBar =
-      trade.side === 'long' ? barByIndex(trade.entryBar) : barByIndex(trade.exitBar);
-    const spreadAt = trade.side === 'long' ? trade.entryTime : exitTime;
+    // One spread per round trip on every basis — what the basis decides is which FILL pays it.
+    //
+    // On a bid feed the stored price is already the sell price, so only the buying leg is charged:
+    // a long pays at entry, a short at exit. On a mid feed neither leg is the stored price, so each
+    // pays half. The totals agree only when the spread and the FX rate are identical at both legs;
+    // with per-bar spreads they diverge, which is the point of charging them where they happen.
+    const entryAction = trade.side === 'long' ? 'buy' : 'sell';
+    const exitAction = trade.side === 'long' ? 'sell' : 'buy';
+    const entryShare = spreadShare(basis, entryAction);
+    const exitShare = spreadShare(basis, exitAction);
+
+    const legSpread = (share: number, bar: Bar | undefined, at: number): number =>
+      share === 0
+        ? 0
+        : priceDeltaToQuote(spreadPriceAt(bar, symbol, config) * share, positionUnits, symbol) *
+          quoteToAccount(at);
+
     const spreadCost =
-      priceDeltaToQuote(spreadPriceAt(spreadBar, symbol, config), positionUnits, symbol) *
-      quoteToAccount(spreadAt);
+      legSpread(entryShare, barByIndex(trade.entryBar), trade.entryTime) +
+      legSpread(exitShare, barByIndex(trade.exitBar), exitTime);
 
     const financingCost =
       financingCostQuote(

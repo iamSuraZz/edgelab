@@ -534,3 +534,77 @@ describe('applyCosts', () => {
     }
   });
 });
+
+describe('applyCosts — price basis', () => {
+  const base = { bars: BARS, symbol: eurusd, quoteToAccount: () => 1 };
+
+  // The fixture bars carry DIFFERENT spreads — 0.00008 at entry, 0.0002 at exit — which is what
+  // makes the basis observable. With one constant spread every basis totals the same and the
+  // change would be invisible.
+
+  it('defaults to bid, preserving the behaviour every other test asserts', () => {
+    const [withDefault] = applyCosts({ ...base, trades: [trade()], config: DEFAULT_COSTS });
+    const [explicit] = applyCosts({
+      ...base,
+      trades: [trade()],
+      config: DEFAULT_COSTS,
+      basis: 'bid',
+    });
+    expect(withDefault!.spreadCost).toBe(explicit!.spreadCost);
+    expect(withDefault!.spreadCost).toBeCloseTo(8, 9);
+  });
+
+  it('splits a mid-feed spread across both fills', () => {
+    // Half of each bar's own spread: 0.5 x 0.00008 + 0.5 x 0.0002 = 0.00014 x 100,000 = $14.
+    const [costed] = applyCosts({
+      ...base,
+      trades: [trade()],
+      config: DEFAULT_COSTS,
+      basis: 'mid',
+    });
+    expect(costed!.spreadCost).toBeCloseTo(14, 9);
+  });
+
+  it('costs a long and a short the same on a mid feed, and different amounts on a bid feed', () => {
+    const mid = (side: 'long' | 'short') =>
+      applyCosts({ ...base, trades: [trade({ side })], config: DEFAULT_COSTS, basis: 'mid' })[0]!
+        .spreadCost;
+    const bid = (side: 'long' | 'short') =>
+      applyCosts({ ...base, trades: [trade({ side })], config: DEFAULT_COSTS, basis: 'bid' })[0]!
+        .spreadCost;
+
+    // On a mid feed both legs pay half, so the side cannot matter.
+    expect(mid('long')).toBeCloseTo(mid('short'), 9);
+
+    // On a bid feed the charge lands on the buying leg, so it picks up that bar's spread.
+    expect(bid('long')).toBeCloseTo(8, 9);
+    expect(bid('short')).toBeCloseTo(20, 9);
+  });
+
+  it('treats a last-trade feed as mid', () => {
+    const last = applyCosts({
+      ...base,
+      trades: [trade()],
+      config: DEFAULT_COSTS,
+      basis: 'last',
+    })[0]!.spreadCost;
+    const mid = applyCosts({ ...base, trades: [trade()], config: DEFAULT_COSTS, basis: 'mid' })[0]!
+      .spreadCost;
+    expect(last).toBe(mid);
+  });
+
+  it('still charges exactly one spread per round trip when the spread is constant', () => {
+    const flat: Bar[] = [
+      bar(Date.UTC(2024, 0, 2, 10, 0), { spread: 0.0001 }),
+      bar(Date.UTC(2024, 0, 2, 11, 0), { spread: 0.0001 }),
+    ];
+    const cost = (basis: 'bid' | 'mid') =>
+      applyCosts({ ...base, bars: flat, trades: [trade()], config: DEFAULT_COSTS, basis })[0]!
+        .spreadCost;
+
+    // 0.0001 x 100,000 = $10 either way. The basis moves WHERE the cost is charged, not how much,
+    // whenever the spread and the FX rate are the same at both fills.
+    expect(cost('bid')).toBeCloseTo(10, 9);
+    expect(cost('mid')).toBeCloseTo(10, 9);
+  });
+});
