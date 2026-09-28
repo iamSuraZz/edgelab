@@ -204,6 +204,9 @@ async function main(): Promise<void> {
     // appears to is worse than one that refuses, because its numbers look like an answer.
     const m1Read = await readM1(db, symbolRow.id, barsFromMs, args.toMs);
     const m1 = m1Read.bars;
+    // A seal cuts the range, so the run records what actually ran with the request beside it.
+    const effectiveToMs = m1Read.truncation === null ? args.toMs : m1Read.truncation.cutAtMs;
+
     if (m1Read.truncation !== null) {
       const t = m1Read.truncation;
       console.log(
@@ -239,7 +242,11 @@ async function main(): Promise<void> {
           : { source: sourceForFixture(name), label: name };
 
       const ok = await runOne({
-        args,
+        // The EFFECTIVE range: every downstream consumer — the engine, the metrics window, the
+        // stored row — sees the window that actually ran, so none of them has to correct for a
+        // truncation later (A40).
+        args: { ...args, toMs: effectiveToMs },
+        ...(m1Read.truncation === null ? {} : { requestedToMs: args.toMs }),
         db,
         engine,
         spec,
@@ -288,6 +295,8 @@ function warmupSpanMs(args: Args): number {
 
 interface RunOneParams {
   readonly args: Args;
+  /** What was asked for, when a seal cut it short. Absent when nothing was withheld. */
+  readonly requestedToMs?: number;
   readonly db: DbClient;
   readonly engine: PineTsEngine;
   readonly spec: SymbolSpec;
@@ -329,6 +338,7 @@ async function runOne(params: RunOneParams): Promise<boolean> {
     timeframe: args.timeframe,
     fromMs: args.fromMs,
     toMs: args.toMs,
+    ...(params.requestedToMs === undefined ? {} : { requestedToMs: params.requestedToMs }),
     initialCapital: args.initialCapital,
     accountCurrency: args.accountCurrency,
     costs: args.costs,

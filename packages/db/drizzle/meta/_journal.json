@@ -43,6 +43,13 @@
       "when": 1790615343243,
       "tag": "0005_careful_human_torch",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790616345235,
+      "tag": "0006_aberrant_wrecker",
+      "breakpoints": true
     }
   ]
 }

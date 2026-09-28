@@ -1,0 +1,1 @@
+ALTER TABLE "backtest_runs" ADD COLUMN "requested_range_to" timestamp with time zone;

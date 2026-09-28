@@ -652,7 +652,12 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
     holdoutResult(
       await getHoldout(params.db, symbolRow.id),
       await holdoutHistory(params.db, symbolRow.id),
-      m1Read.truncation,
+      // From the RUN RECORD, not from this validation's own read. The stored range is already the
+      // effective one (A40), so re-reading it is never truncated — the fact that the original
+      // request was cut survives only in `requestedToMs`.
+      run.requestedToMs === null
+        ? null
+        : { sealId: '', cutAtMs: run.toMs, requestedToMs: run.requestedToMs, barsWithheld: 0 },
     ),
     lintResult(lint),
     prefixResult(prefix, cutoffs.length),
@@ -1466,14 +1471,19 @@ function holdoutResult(
   };
 
   if (truncation !== null) {
+    // WARN, not fail (A40). The run's recorded range is the EFFECTIVE one, so its numbers already
+    // match the window they claim — nothing here is wrong, it is just a shorter question than the
+    // one asked. `fail` stays reserved for a strategy failing a check.
     return {
       ...base,
-      status: 'fail',
+      status: 'warn',
       detail:
-        `This run's range was CUT at ${new Date(truncation.cutAtMs).toISOString().slice(0, 10)} by ` +
-        `the sealed holdout: ${String(truncation.barsWithheld)} M1 bars were withheld of the range ` +
-        `requested to ${new Date(truncation.requestedToMs).toISOString().slice(0, 10)}. Every ` +
-        `figure in this report describes the shorter window. ${description}`,
+        `A sealed holdout cut this range at ` +
+        `${new Date(truncation.cutAtMs).toISOString().slice(0, 10)}, where ` +
+        `the range requested ran to ` +
+        `${new Date(truncation.requestedToMs).toISOString().slice(0, 10)}. The run is recorded ` +
+        `against the shorter window it actually covered, so every figure here matches its stated ` +
+        `range. ${description}`,
       evidence,
     };
   }

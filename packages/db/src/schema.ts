@@ -222,8 +222,23 @@ export const backtestRuns = pgTable(
       .references(() => symbols.id, { onDelete: 'restrict' }),
     /** Timeframe code from @edgelab/shared, e.g. 'H4'. */
     timeframe: text('timeframe').notNull(),
+    /**
+     * The range the run ACTUALLY covered.
+     *
+     * When a sealed holdout cut the request short this is the shorter window, so every metric on
+     * this run matches the range recorded beside it by construction. A row whose range says one
+     * thing while its bars say another would force every consumer — the report header, compare, the
+     * metrics window — to remember to correct for it (A40).
+     */
     rangeFrom: timestamp('range_from', { withTimezone: true }).notNull(),
     rangeTo: timestamp('range_to', { withTimezone: true }).notNull(),
+    /**
+     * What was asked for, when it differs from what ran. Null when nothing was withheld.
+     *
+     * This is what keeps the truncation visible: the effective range alone would be indistinguishable
+     * from a run someone simply configured that way.
+     */
+    requestedRangeTo: timestamp('requested_range_to', { withTimezone: true }),
 
     initialCapital: doublePrecision('initial_capital').notNull(),
     accountCurrency: text('account_currency').notNull(),

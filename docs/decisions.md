@@ -1606,8 +1606,8 @@ any number of retired ones. `describeHoldout` takes the whole history, so a fres
 views between them. Every report names the seal it ran under — without an id, "viewed 0 times" cannot
 distinguish a pristine holdout from a fresh one over well-trodden data.
 
-Proven end to end: seal, retire, re-seal. The new seal reports *"1 earlier seal(s) on this symbol
-were retired after 0 view(s) in total, so this data is not untouched"*, and the history lists both.
+Proven end to end: seal, retire, re-seal. The new seal reports _"1 earlier seal(s) on this symbol
+were retired after 0 view(s) in total, so this data is not untouched"_, and the history lists both.
 The three retired seals now on EURUSD are from this verification and stay on the record, which is the
 feature behaving.
 
@@ -1675,3 +1675,14 @@ by construction, and the requested range beside it is what makes the truncation 
 And `fail` was the wrong severity: it is reserved for a strategy failing a check. A truncated run is
 not a failing strategy, it is a shorter question honestly answered. `warn` says so without implying
 the strategy did anything wrong.
+
+**Implemented, and it moved where the fact lives.** `backtest_runs.requested_range_to` is set only
+when a seal cut the request; `range_to` is the effective end. That has a consequence worth stating:
+re-validating such a run is NEVER truncated, because its stored range no longer reaches the seal. The
+check therefore reads the truncation from the RUN RECORD rather than from its own bar read — the
+first version read the latter and silently reported `ok`. Verified end to end:
+
+    backtest   NOTE: cut at 2022-05-27 — 35621 M1 bars withheld
+    stored     range_from 2022-01-01  range_to 2022-05-27  requested_range_to 2022-07-01
+    validate   warn Sealed holdout — recorded against the shorter window it actually covered,
+               so every figure here matches its stated range

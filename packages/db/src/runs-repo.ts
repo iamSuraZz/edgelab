@@ -135,8 +135,11 @@ export interface CreateRunParams {
   readonly strategyVersionId: string;
   readonly symbolId: string;
   readonly timeframe: string;
+  /** The range that ACTUALLY ran, after any holdout truncation (A40). */
   readonly fromMs: number;
   readonly toMs: number;
+  /** What was asked for, when a seal cut it short. Omit when nothing was withheld. */
+  readonly requestedToMs?: number;
   readonly initialCapital: number;
   readonly accountCurrency: string;
   readonly costs: unknown;
@@ -162,6 +165,7 @@ export async function createRun(db: Database, params: CreateRunParams): Promise<
       timeframe: params.timeframe,
       rangeFrom: toDbTime(params.fromMs),
       rangeTo: toDbTime(params.toMs),
+      requestedRangeTo: params.requestedToMs === undefined ? null : toDbTime(params.requestedToMs),
       initialCapital: params.initialCapital,
       accountCurrency: params.accountCurrency,
       costs: params.costs,
@@ -415,8 +419,11 @@ export interface RunDetailRow {
   readonly sourceHash: string;
   readonly symbol: string;
   readonly timeframe: string;
+  /** The range that actually ran. */
   readonly fromMs: number;
   readonly toMs: number;
+  /** What was asked for, when a sealed holdout cut it short. Null when nothing was withheld. */
+  readonly requestedToMs: number | null;
   readonly initialCapital: number;
   readonly accountCurrency: string;
   readonly costs: unknown;
@@ -476,6 +483,7 @@ export async function readRun(db: Database, runId: string): Promise<RunDetailRow
     timeframe: row.run.timeframe,
     fromMs: fromDbTime(row.run.rangeFrom),
     toMs: fromDbTime(row.run.rangeTo),
+    requestedToMs: row.run.requestedRangeTo === null ? null : fromDbTime(row.run.requestedRangeTo),
     initialCapital: row.run.initialCapital,
     accountCurrency: row.run.accountCurrency,
     costs: row.run.costs,
