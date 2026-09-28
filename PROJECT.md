@@ -207,6 +207,16 @@ construction. That measurement settled a question an aggregate could not: **Pine
 slips a limit order. Recorded in `docs/pinets-notes.md` and surfaced as a `divergent-strategy-prop`
 warning — not an "ignored prop" one, since the prop is applied.
 
+**That slippage is now REFUNDED (A29).** A limit order cannot fill worse than its price; its real
+risk is not filling at all, which the phantom-target check already measures. The measured amount is
+credited back as its own waterfall line — "limit-fill slippage refunded: engine divergence" — and the
+P&L identity `grossBeforeCosts - totalCosts === netProfit` still holds because the refund is a
+correction, not a cost. On the bracket fixture with `slippage=15`: **$450.00 refunded**, net profit
+-1,588.05 -> -1,138.05, total costs 3,023.05 -> 2,573.05, each by exactly that. The analytical
+break-even now counts only chargeable sides (a limit fill cannot degrade), shared with the cost
+stress rather than recomputed; on the zero-slippage control the two agree **exactly** at 1.06 pips
+per side. Schema: `run_trades.slippage_refund`, migration 0004.
+
 **Stop and target levels now come from the ORDER LOG, not from clustering exit prices (A23), and are
 paired per exit id (A25).** A `partial-exits` fixture with two simultaneous brackets replays 998 of
 1,171 trades against their own bracket's levels with none ambiguous.
