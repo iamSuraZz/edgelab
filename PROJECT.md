@@ -95,7 +95,7 @@ pnpm run import:file mt5 EURUSD <abs.csv> 120        # 120 = broker server UTC o
 
 ## Current status — NOT v1.0
 
-Green: `build` 9/9, `typecheck` 16/16, `lint` clean, **856 tests** (`pnpm test`).
+Green: `build` 9/9, `typecheck` 16/16, `lint` clean, **869 tests** (`pnpm test`).
 CI runs all five checks on every push — see `.github/workflows/ci.yml`.
 
 **Verified against the real docker stack:**
@@ -170,12 +170,28 @@ roadmap's "in the browser" is NOT met.
 | CI on the public repo (A9)                                         | see badge / Actions tab      |
 | Exness imports + MT5 parity test (A12)                             | **NOT PLANNED** — no exports |
 
-**Execution bias is COMPLETE, and the OOS split (A32) is done and verified.** Still to build in step
-1, in this order: walk-forward (A3 timing first), **sealed holdout** (A17), timeframe matrix +
-regimes, and Monte Carlo. Each must run through `pnpm validate` on the 2022 data before the next
+**Execution bias, the OOS split (A32) and walk-forward (A34) are done and verified.** Still to build
+in step 1, in this order: **sealed holdout** (A17), timeframe matrix + regimes, and Monte Carlo. Each must run through `pnpm validate` on the 2022 data before the next
 starts. A24 records four constraints agreed ahead of those steps; A26 (trailing-stop replay), A30
 (regime mix in the OOS report) and A31 (spread on resting fills from the replay) are post-slice-D
 follow-ups.
+
+**A3 is settled (A33): transpile is NOT worth caching.** Measured — script setup is flat at ~14ms
+regardless of window, execution is ~39ms + **0.042ms/bar**. Caching would save ~110ms across a
+four-fold walk-forward, while `runPretranspiled` bypasses the instrumentation seam and would cost the
+order log (which A23/A28 depend on) and the warmup gate. `setupMs`/`executeMs` are now in
+`EngineStats` and printed by `pnpm backtest`.
+
+**Walk-forward (A34) disagrees with the single OOS split in BOTH directions**, which is why both
+exist. Rolling folds, 4 at a 3:1 ratio, each half its own run from initial capital:
+
+| fixture            | OOS split | walk-forward                       |
+| ------------------ | --------- | ---------------------------------- |
+| rsi-mean-reversion | **pass**  | **warn** — 1 of 2 folds, WFE -0.07 |
+| supertrend-atr     | **fail**  | **warn** — 3 of 4 folds, WFE 0.45  |
+| bollinger-breakout | **fail**  | **fail** — 1 of 3 folds, WFE -0.12 |
+
+A full validation is now **13 checks, ~30 engine runs, 2.6s** on six months of H1.
 
 **The OOS split discriminates on its first real run.** Each segment is its own run from the same
 starting capital (A24), never a slice — a slice would inherit position sizes grown by in-sample
@@ -327,9 +343,8 @@ pnpm backtest --fixture ema-cross --symbol EURUSD --tf H1 --from 2024-01-01 --to
 
 What is verified, phase by phase, with the evidence: **`docs/verified.md`**.
 
-Open questions: whether the validation
-sample-size guard should report `n/a` rather than `fail` on structurally short walk-forward
-segments. _Settled:_ W1 anchor and fx session DST by D2/D3; `strategy.*` inside
+Open questions: none outstanding. _Settled:_ the sample-size guard reports `n/a`, never `fail`, on
+structurally short walk-forward segments (A34); W1 anchor and fx session DST by D2/D3; `strategy.*` inside
 `request.security_lower_tf` by D1 — `compile()` now rejects that combination.
 
 ### Slice E — what exists, what does not

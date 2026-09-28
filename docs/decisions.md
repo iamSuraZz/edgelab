@@ -1406,8 +1406,8 @@ worker thread if `runPretranspiled` accepts an inputs map. Measured, on `rsi-mea
 EURUSD H1, by splitting engine time into setup (parse, transpile, overrides, seam installation — no
 bars, no I/O) and execution:
 
-| window            | bars  | setup | execute |
-| ----------------- | ----- | ----- | ------- |
+| window             | bars  | setup | execute |
+| ------------------ | ----- | ----- | ------- |
 | 2022-01 .. 2022-02 | 506   | 15ms  | 60ms    |
 | 2022-01 .. 2022-04 | 1,539 | 12ms  | 94ms    |
 | 2022-01 .. 2022-07 | 3,099 | 14ms  | 168ms   |
@@ -1452,11 +1452,11 @@ from a near-zero denominator cannot drag the summary.
 **Measured on real data, and it disagrees with the single OOS split in BOTH directions**, which is
 the argument for keeping both:
 
-| fixture             | OOS split | walk-forward                      |
-| ------------------- | --------- | --------------------------------- |
-| rsi-mean-reversion  | **pass**  | **warn** — 1 of 2 folds, WFE -0.07 |
-| supertrend-atr      | **fail**  | **warn** — 3 of 4 folds, WFE 0.45  |
-| bollinger-breakout  | **fail**  | **fail** — 1 of 3 folds, WFE -0.12 |
+| fixture            | OOS split | walk-forward                       |
+| ------------------ | --------- | ---------------------------------- |
+| rsi-mean-reversion | **pass**  | **warn** — 1 of 2 folds, WFE -0.07 |
+| supertrend-atr     | **fail**  | **warn** — 3 of 4 folds, WFE 0.45  |
+| bollinger-breakout | **fail**  | **fail** — 1 of 3 folds, WFE -0.12 |
 
 `supertrend-atr` fails a single split but holds in three folds of four while keeping under half its
 in-sample return — the split landed on one bad window. `rsi-mean-reversion` is the reverse: it passes
