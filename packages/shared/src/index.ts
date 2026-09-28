@@ -10,6 +10,7 @@ export * from './feeds';
 export * from './units';
 export * from './market';
 export * from './exit-levels';
+export * from './holdout';
 export * from './price-basis';
 export * from './symbols';
 export * from './metrics-dictionary';

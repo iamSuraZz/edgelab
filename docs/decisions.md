@@ -1546,3 +1546,48 @@ without changing their verdict: `rsi-mean-reversion` -0.07 to -0.20, `bollinger-
 
 The thresholds keep their numeric values — warn below 0.5, and so on — because for the first time
 they now mean what they always claimed to: half the in-sample earning rate.
+
+## A37 · The sealed holdout is enforced at the bar reader
+
+Spec 06 §3's holdout reserves the most recent share of a symbol's data. The point is not secrecy —
+it is that looking is RECORDED, so a result on the holdout means something the first time and
+progressively less after that. A holdout viewed nine times is in-sample data with extra steps, and
+the only thing that makes that visible is the count.
+
+**The seal is applied in `readM1`, which is the one function every reader goes through** — the
+Studio's date presets, the backtest job, the validation runner, the rolling folds, walk-forward
+optimisation. A24 called this out and it is the whole design: enforcing it in the validation runner
+would be theatre, because five other paths load bars and any one of them would hand the holdout over
+without comment. Reading sealed bars requires `readM1Unsealed`, which increments the view count
+BEFORE returning anything, so there is no route to the data that leaves no trace.
+
+**Truncation, not refusal.** A run whose range overlaps the seal still runs, on the data it is
+allowed. Refusing would push people towards unsealing for ordinary work, which is exactly the habit
+the seal exists to prevent. What it must never do is return sealed bars while reporting the requested
+range, so the caller is told what was withheld.
+
+**`sealed_from` is an instant, frozen at sealing, not a fraction.** A fraction would move as new data
+arrived, so yesterday's out-of-sample result would quietly become part of today's training set.
+
+**Re-sealing is refused.** Moving a seal is the one operation that makes the view count meaningless:
+look at the data, move the boundary, and the counter reads zero over ground already walked. Dropping
+a holdout is explicit and separate.
+
+The seal is consulted on every read, so it is cached per client and per symbol, invalidated only by
+the two writes that can change it. Deliberately not time-based — a cache that expires on its own
+would mean enforcement quietly weakening while the process runs.
+
+Verified against the real stack on EURUSD, 2022-01-01 .. 2022-07-01 at a 20% holdout:
+
+    unsealed read   185,122 bars, last 2022-06-30T23:59
+    sealed at       2022-05-25T19:12
+    sealed read     147,580 bars, last 2022-05-25T19:11   (37,542 withheld)
+    read wholly inside the seal   0 bars
+    view count 0 -> readM1Unsealed returns 185,122 -> count 1
+
+The last sealed bar sits one minute before the seal instant, which is the half-open boundary
+behaving. `pnpm test:e2e` stays 25/25: with no holdout sealed, every read is unchanged.
+
+Still to build: the `pnpm holdout` CLI (seal / status / drop), and a validation check that reports
+"holdout viewed N times" beside the verdict so a weakened holdout is visible in the report rather
+than only in the database.

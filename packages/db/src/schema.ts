@@ -87,6 +87,24 @@ export const candlesM1 = pgTable(
   (t) => [primaryKey({ columns: [t.symbolId, t.ts] })],
 );
 
+/**
+ * A sealed holdout: the most recent slice of a symbol's data, reserved from ordinary reads.
+ *
+ * One row per symbol. `sealed_from` is an INSTANT rather than a fraction, frozen when the holdout is
+ * created — a fraction would move as new data arrived, so yesterday's out-of-sample result would
+ * quietly become part of today's training set.
+ */
+export const holdouts = pgTable('holdouts', {
+  symbolId: uuid('symbol_id')
+    .primaryKey()
+    .references(() => symbols.id, { onDelete: 'cascade' }),
+  sealedFrom: timestamp('sealed_from', { withTimezone: true }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  /** Times the seal has been deliberately broken. The number that makes a holdout mean something. */
+  viewCount: integer('view_count').notNull().default(0),
+  lastViewedAt: timestamp('last_viewed_at', { withTimezone: true }),
+});
+
 /** An ingest or import run, so the Data page can show history and resume. */
 export const ingestJobs = pgTable(
   'ingest_jobs',

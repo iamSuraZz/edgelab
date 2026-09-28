@@ -1,5 +1,6 @@
 import type { Bar } from '@edgelab/shared';
 import type { DbClient } from './client';
+import { allowedWindow, recordHoldoutView } from './holdout-repo';
 import { fromDbTime, toDbTime } from './time';
 
 /**
@@ -37,7 +38,49 @@ interface CandleRow {
   spread: number | null;
 }
 
+/**
+ * Bars for a window, with any SEALED HOLDOUT withheld.
+ *
+ * The seal is applied here because this is the one function every reader goes through — the Studio's
+ * date presets, the backtest job, the validation runner, walk-forward, the optimiser. Enforcing it
+ * anywhere higher would leave the others handing over the holdout without comment (A24).
+ *
+ * A request overlapping the seal is TRUNCATED, not refused: a backtest should still run on the data
+ * it is allowed, because refusing would push people towards unsealing for ordinary work — the exact
+ * habit the seal exists to prevent. What it must never do is return sealed bars while reporting the
+ * requested range.
+ *
+ * To read sealed data deliberately, call `readM1Unsealed`, which records the view first.
+ */
 export async function readM1(
+  client: DbClient,
+  symbolId: string,
+  fromMs: number,
+  toMs: number,
+): Promise<Bar[]> {
+  const window = await allowedWindow(client, symbolId, fromMs, toMs);
+  if (window.empty) return [];
+  return queryM1(client, symbolId, window.fromMs, window.toMs);
+}
+
+/**
+ * Bars including the holdout, counting the view.
+ *
+ * Every call increments the symbol's view count before any data is returned, so there is no path to
+ * sealed bars that leaves no trace. That counter is the only thing that distinguishes a holdout from
+ * ordinary data: looked at often enough, it IS ordinary data.
+ */
+export async function readM1Unsealed(
+  client: DbClient,
+  symbolId: string,
+  fromMs: number,
+  toMs: number,
+): Promise<Bar[]> {
+  await recordHoldoutView(client, symbolId);
+  return queryM1(client, symbolId, fromMs, toMs);
+}
+
+async function queryM1(
   client: DbClient,
   symbolId: string,
   fromMs: number,
