@@ -4,6 +4,7 @@ export * from './checks';
 export * from './lookahead';
 export * from './cost-stress';
 export * from './intrabar-replay';
+export * from './oos-split';
 export * from './per-fill';
 export * from './same-bar';
 export * from './static-lint';

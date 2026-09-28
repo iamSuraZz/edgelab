@@ -1357,3 +1357,45 @@ unresolvable multi-bracket exits (A25), so a straight substitution would silentl
 spread on precisely the trades it cannot measure — turning a modelling gap into free execution. That
 has to be closed first, which is what A26 (trailing-stop replay) is for.
 
+
+## A32 · Out-of-sample split
+
+The first 70% of the window is where fit is measured, the last 30% is the honesty test. The question
+is never whether the out-of-sample half made money — it is whether the edge the in-sample half showed
+SURVIVED into data the strategy was not shaped around.
+
+**Each segment is its own run from the same starting capital** (A24), not a slice of the full run.
+Slicing is the obvious implementation and it is wrong under any equity-proportional sizing: the
+out-of-sample slice would inherit position sizes grown by in-sample profits, so a strategy would look
+better out of sample exactly when it did well in sample. Warmup needs no special handling — the
+engine already loads bars before `fromMs` and its gate suppresses orders on them, so the second
+segment starts warm without trading early.
+
+70/30 rather than 50/50: the out-of-sample half only has to be long enough to produce a usable number
+of trades, and every bar given to it is a bar the in-sample half cannot use to establish there was an
+edge at all.
+
+**Two `n/a` cases, both deliberate.** Fewer than ten trades in either segment, because a ratio
+between two small samples describes the samples. And an in-sample half that lost money — there is
+then no edge whose persistence could be tested, which is neither a pass nor a failure of the split.
+Every ratio guards its denominator rather than checking the result afterwards, per A24.
+
+**It discriminates on real data.** EURUSD H1, 2022-01-01 .. 2022-07-01, split at 70%:
+
+| fixture             | in-sample | out-of-sample | verdict  |
+| ------------------- | --------- | ------------- | -------- |
+| rsi-mean-reversion  | PF 1.10   | PF 1.75       | **pass** |
+| supertrend-atr      | +5,187.75 | **-487.88**   | **fail** |
+| bollinger-breakout  | +4,270.92 | **-3,219.33** | **fail** |
+
+Two of the three fixtures that looked profitable over the full window do not survive the split. That
+is the check earning its place on the first real run.
+
+**A near-zero denominator is the soft form of the A24 trap.** `macd-htf-filter` returned 0.60% in
+sample and 11.49% out of sample, which the ratio rendered as "kept 1911%" — a division result
+presented as a triumph. The ratio is now withheld below a 1% in-sample return, with the reason
+stated: the in-sample half barely established an edge to test. Still a pass, since it did make money
+out of sample; just not a headline number that means nothing.
+
+Regime mix per segment is still to come with step 5 (A30), so a regime shift between the halves is
+not mistaken for overfitting.

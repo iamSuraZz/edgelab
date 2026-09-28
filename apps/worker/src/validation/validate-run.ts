@@ -8,6 +8,10 @@ import {
   checkCausality,
   auditFills,
   analyseCostStress,
+  analyseOosSplit,
+  splitInstant,
+  type OosSplitResult,
+  type SegmentMetrics,
   checkBidAskAsymmetry,
   describePerFill,
   type CostStressResult,
@@ -105,6 +109,15 @@ const COST_STRESS_MULTIPLIERS = [0, 0.5, 2, 3] as const;
 const COST_STRESS_EXTENSIONS = [5, 10, 20] as const;
 
 /**
+ * Share of the window kept for fitting. The rest is the honesty test.
+ *
+ * 70/30 rather than 50/50 because the out-of-sample half only has to be long enough to produce a
+ * usable number of trades, and every bar given to it is a bar the in-sample half cannot use to
+ * establish there was an edge at all.
+ */
+const OOS_SPLIT_FRACTION = 0.7;
+
+/**
  * How much of the future to replace, sized to the longest timeframe the script actually requests.
  *
  * A fixed week was the first cut and it is not enough. The leak horizon is one bucket of whatever
@@ -139,6 +152,7 @@ export interface ValidationReport {
   readonly asymmetry: AsymmetryResult | null;
   readonly replay: IntrabarReplayResult | null;
   readonly stress: CostStressResult | null;
+  readonly oos: OosSplitResult | null;
   readonly elapsedMs: number;
 }
 
@@ -548,6 +562,40 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
     totalFills: full.trades.length * 2,
   });
 
+  /* --------------------------------------------- OOS split (spec 06 §3) */
+
+  report(95, 'out-of-sample split');
+
+  const splitMs = splitInstant(run.fromMs, run.toMs, OOS_SPLIT_FRACTION);
+
+  // Each segment is its OWN run from the SAME starting capital (A24). Slicing the full run's trades
+  // in two would hand the out-of-sample half position sizes grown by in-sample profits under any
+  // equity-proportional sizing, so a strategy would look better out of sample precisely when it did
+  // well in sample. Warmup needs no special handling: the engine loads bars before `fromMs` and its
+  // gate suppresses orders on them, so the second segment starts warm without trading early.
+  const segment = async (fromMs: number, toMs: number): Promise<SegmentMetrics> => {
+    const r = await orchestrateRun({ ...shared, fromMs, toMs });
+    return {
+      fromMs,
+      toMs,
+      trades: r.trades.length,
+      netProfit: r.metrics.performance.netProfit,
+      returnPct: r.metrics.performance.totalReturnPct,
+      profitFactor: r.metrics.performance.profitFactor,
+      sharpe: r.metrics.risk.sharpe,
+      winRatePct: r.metrics.trades.all.winRatePct,
+      maxDrawdownPct: r.metrics.risk.intrabar.maxDrawdownPct,
+      expectancy: r.metrics.trades.all.expectancy,
+    };
+  };
+
+  const oos = analyseOosSplit({
+    inSample: await segment(run.fromMs, splitMs),
+    outOfSample: await segment(splitMs, run.toMs),
+    splitMs,
+    splitFraction: OOS_SPLIT_FRACTION,
+  });
+
   /* --------------------------------------------------------- the checks */
 
   report(90, 'judging');
@@ -561,6 +609,7 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
     asymmetryResult(asymmetry, feed),
     replayResult(replay),
     costStressResult(stress),
+    oosResult(oos),
     ...runChecks(BUILT_IN_CHECKS, {
       bars: full.engineResult.bars,
       timeframe,
@@ -613,6 +662,7 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
     asymmetry,
     replay,
     stress,
+    oos,
     elapsedMs: Date.now() - startedAt,
   };
 }
@@ -1271,4 +1321,37 @@ function costStressResult(s: CostStressResult): CheckResult {
         : ''),
     evidence,
   };
+}
+
+/** The OOS split as a verdict. */
+function oosResult(o: OosSplitResult): CheckResult {
+  const base = {
+    id: 'overfitting-oos-split',
+    label: 'Out-of-sample split',
+    severity: 'critical' as const,
+  };
+
+  const evidence = {
+    splitFraction: o.splitFraction,
+    inSampleTrades: o.inSample.trades,
+    outOfSampleTrades: o.outOfSample.trades,
+    inSampleNetProfit: Number(o.inSample.netProfit.toFixed(2)),
+    outOfSampleNetProfit: Number(o.outOfSample.netProfit.toFixed(2)),
+    returnRatio:
+      o.degradation.returnRatio === null ? 0 : Number(o.degradation.returnRatio.toFixed(3)),
+    sharpeDelta:
+      o.degradation.sharpeDelta === null ? 0 : Number(o.degradation.sharpeDelta.toFixed(3)),
+  };
+
+  if (o.verdict === 'n/a') {
+    return {
+      ...base,
+      status: 'n/a',
+      detail: o.explanation,
+      inconclusiveReason: o.inconclusiveReason ?? o.explanation,
+      evidence,
+    };
+  }
+
+  return { ...base, status: o.verdict, detail: o.explanation, evidence };
 }
