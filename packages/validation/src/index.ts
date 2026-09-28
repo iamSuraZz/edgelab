@@ -16,3 +16,4 @@ export * from './rolling-oos';
 export * from './wf-optimization';
 export * from './wf-optimization-report';
 export * from './regime';
+export * from './timeframe-matrix';

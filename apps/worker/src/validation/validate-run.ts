@@ -19,6 +19,10 @@ import {
   auditFills,
   analyseCostStress,
   analyseOosSplit,
+  analyseTimeframeMatrix,
+  cellAvailability,
+  type MatrixCell,
+  type TimeframeMatrixResult,
   breakdownByRegime,
   dailySessions,
   fxSessionBoundaries,
@@ -147,6 +151,16 @@ const NY_TIME_ZONE = 'America/New_York';
 const NY_CLOSE_MINUTE_OF_DAY = 17 * 60;
 
 /**
+ * Chart timeframes the matrix tries.
+ *
+ * A ladder rather than every timeframe in the registry: the question is whether an edge survives a
+ * change of bar size, and neighbours answer that. M1 and MN1 are excluded at opposite ends — M1
+ * makes cost assumptions dominate everything, and MN1 produces too few bars over any window this
+ * platform stores to say anything.
+ */
+const TIMEFRAME_LADDER: readonly Timeframe[] = ['M15', 'M30', 'H1', 'H4', 'D1'];
+
+/**
  * Rolling walk-forward layout: 4 folds, each training on 3 blocks and testing on 1.
  *
  * Four rather than ten because each fold is two engine runs and, more importantly, because a finer
@@ -195,6 +209,7 @@ export interface ValidationReport {
   readonly oos: OosSplitResult | null;
   readonly rollingOos: RollingOosResult | null;
   readonly regimes: RegimeBreakdown | null;
+  readonly matrix: TimeframeMatrixResult | null;
   readonly elapsedMs: number;
 }
 
@@ -686,6 +701,55 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
     dayLabels,
   );
 
+  /* --------------------------------------- timeframe matrix (spec 06 §3) */
+
+  report(99, 'timeframe matrix');
+
+  // The requested timeframes come from the causality log, so the n/a rule is applied to what the
+  // script actually asks for rather than to a guess from its text (A40).
+  const requestedTfs = (full.engineResult.securityCalls ?? []).map((call) => {
+    const tf = parsePineTimeframe(call.timeframe);
+    return { timeframe: call.timeframe, ms: tf === null ? 0 : (timeframeMs(tf) ?? 0) };
+  });
+
+  const matrixCells: MatrixCell[] = [];
+  for (const tf of TIMEFRAME_LADDER) {
+    const tfMsHere = timeframeMs(tf) ?? 0;
+    const availability = cellAvailability(tf, tfMsHere, requestedTfs);
+
+    if (availability.status === 'n/a') {
+      matrixCells.push({
+        timeframe: tf,
+        status: 'n/a',
+        reason: availability.reason,
+        metrics: null,
+      });
+      continue;
+    }
+
+    // Its own run from the same starting capital, like every other segment (A24).
+    const cellRun = await orchestrateRun({ ...shared, timeframe: tf });
+    matrixCells.push({
+      timeframe: tf,
+      status: 'ok',
+      reason: null,
+      metrics: {
+        fromMs: run.fromMs,
+        toMs: run.toMs,
+        trades: cellRun.trades.length,
+        netProfit: cellRun.metrics.performance.netProfit,
+        returnPct: cellRun.metrics.performance.totalReturnPct,
+        profitFactor: cellRun.metrics.performance.profitFactor,
+        sharpe: cellRun.metrics.risk.sharpe,
+        winRatePct: cellRun.metrics.trades.all.winRatePct,
+        maxDrawdownPct: cellRun.metrics.risk.intrabar.maxDrawdownPct,
+        expectancy: cellRun.metrics.trades.all.expectancy,
+      },
+    });
+  }
+
+  const matrix = analyseTimeframeMatrix({ cells: matrixCells, baseTimeframe: timeframe });
+
   /* --------------------------------------------------------- the checks */
 
   report(90, 'judging');
@@ -712,6 +776,7 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
     oosResult(oos),
     rollingOosResult(rollingOos),
     regimeResult(regimes),
+    matrixResult(matrix),
     ...runChecks(BUILT_IN_CHECKS, {
       bars: full.engineResult.bars,
       timeframe,
@@ -767,6 +832,7 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
     oos,
     rollingOos,
     regimes,
+    matrix,
     elapsedMs: Date.now() - startedAt,
   };
 }
@@ -1610,6 +1676,52 @@ function regimeResult(r: RegimeBreakdown): CheckResult {
         `${summary}. An edge confined to one regime is a bet that the regime persists, which the ` +
         `headline metrics do not show. ${r.explanation}`
       : `${summary}. ${r.explanation}`,
+    evidence,
+  };
+}
+
+/** The timeframe matrix as a verdict. */
+function matrixResult(m: TimeframeMatrixResult): CheckResult {
+  const base = {
+    id: 'overfitting-timeframe-matrix',
+    label: 'Timeframe matrix',
+    severity: 'critical' as const,
+  };
+
+  const evidence = {
+    baseTimeframe: m.baseTimeframe,
+    ran: m.ran,
+    skipped: m.skipped,
+    assessable: m.assessable,
+    profitable: m.profitable,
+    ...Object.fromEntries(
+      m.cells
+        .filter((c) => c.metrics !== null)
+        .map((c) => [c.timeframe, Number((c.metrics?.netProfit ?? 0).toFixed(2))] as const),
+    ),
+  };
+
+  // The skipped cells carry their own reason, which is the whole point of skipping rather than
+  // running them: a blank with an explanation beats a number from an incoherent configuration.
+  const skippedNote = m.cells
+    .filter((c) => c.status === 'n/a' && c.reason !== null)
+    .map((c) => `${c.timeframe}: ${c.reason as string}`)
+    .join(' ');
+
+  if (m.verdict === 'n/a') {
+    return {
+      ...base,
+      status: 'n/a',
+      detail: `${m.explanation} ${skippedNote}`.trim(),
+      inconclusiveReason: m.inconclusiveReason ?? m.explanation,
+      evidence,
+    };
+  }
+
+  return {
+    ...base,
+    status: m.verdict,
+    detail: `${m.explanation} ${skippedNote}`.trim(),
     evidence,
   };
 }

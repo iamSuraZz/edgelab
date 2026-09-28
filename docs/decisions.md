@@ -1783,3 +1783,33 @@ mode makes exactly one of the two quantities stationary, and that is the one to 
 The sizing mode is knowable rather than guessed — `default_qty_type` is a declared strategy property
 and the order log records the resolved `qty` of every entry — so this is a branch on a fact, not a
 heuristic. When the mode cannot be determined the check reports `n/a` rather than picking one.
+
+## A44 · Timeframe matrix
+
+A ladder of M15, M30, H1, H4, D1 — each cell its own run from the same starting capital (A24). M1 and
+MN1 are excluded at opposite ends: on M1 the cost assumptions dominate every result, and MN1 produces
+too few bars over any window this platform stores to say anything.
+
+**It reports the SHAPE of the row, never its maximum.** A matrix read as a menu is a way to overfit
+one more dimension, which is the opposite of the point. The finding it exists for is the base
+timeframe standing alone — profitable where it was chosen and nowhere near it — and that is the only
+condition scored `fail`. Exactly half the cells profitable warns rather than passes: a coin flip
+across bar sizes is not evidence of robustness in either direction.
+
+**A40's rule is wired to the causality log, not to the source text.** A cell is `n/a` when the chart
+timeframe is COARSER than something the script requests through `request.security`, and the reason is
+printed in the cell. Verified on `macd-htf-filter`, which requests H4:
+
+    D1: The script requests 240 through request.security, which is FINER than a D1 chart...
+
+Measured on the 2022 H1 data, and both fixtures tell the same story from different angles:
+
+| fixture            | M15    | M30   | H1    | H4  | D1  | verdict |
+| ------------------ | ------ | ----- | ----- | --- | --- | ------- |
+| rsi-mean-reversion | -4,374 | -824  | 1,500 | 461 | —   | warn    |
+| macd-htf-filter    | -297   | -1,940 | 4,066 | 945 | n/a | warn    |
+
+Both make money on H1 and H4 and lose on the shorter bars, which is a coherent shape rather than a
+single spike — hence `warn` and not `fail`. That the loss grows as the bars shrink is what one would
+expect if costs, not the signal, were doing the work down there; the cost stress (A27) is the check
+that answers whether that is so.
