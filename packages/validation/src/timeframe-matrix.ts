@@ -20,12 +20,53 @@ import type { SegmentMetrics } from './oos-split';
 
 export type CellStatus = 'ok' | 'n/a';
 
+/**
+ * What a cell cost, beside what it earned.
+ *
+ * Reported per cell because the cost stress (A27) runs on the BASE timeframe only and therefore
+ * cannot say whether costs or the signal sink the shorter-bar cells — which is the first question
+ * anyone asks of a row that gets worse as the bars shrink. Gross against net answers it from figures
+ * each cell already produced, at no extra run.
+ */
+export interface CellCosts {
+  /** P&L with the overlay removed: what the signal did before execution was charged for. */
+  readonly grossProfit: number;
+  readonly totalCosts: number;
+  /**
+   * Costs as a share of gross profit. Null unless gross is strictly POSITIVE.
+   *
+   * A share against a negative gross flips sign and reads as though costs were a credit — "costs
+   * -37% of gross" on a cell that lost 3,200 before costs. Same denominator guard as A24 and A36:
+   * the ratio is undefined, so it is withheld rather than printed.
+   */
+  readonly costShareOfGross: number | null;
+}
+
+/** Why a cell lost money, when it did. */
+export type LossCause = 'costs' | 'signal' | null;
+
 export interface MatrixCell {
   readonly timeframe: string;
   readonly status: CellStatus;
   /** Present when the cell could not be run. */
   readonly reason: string | null;
   readonly metrics: SegmentMetrics | null;
+  readonly costs: CellCosts | null;
+}
+
+/**
+ * Whether costs or the signal sank a cell.
+ *
+ * `costs` when the strategy made money before execution was charged and lost it after: the edge is
+ * real at that bar size and too small to pay for itself. `signal` when it lost money gross: there
+ * was nothing there to charge for. The two call for opposite responses — cheaper execution can
+ * rescue the first and nothing rescues the second — so a row that merely says "loses on M15" has
+ * withheld the part that matters.
+ */
+export function lossCause(cell: MatrixCell): LossCause {
+  if (cell.metrics === null || cell.costs === null) return null;
+  if (cell.metrics.netProfit > 0) return null;
+  return cell.costs.grossProfit > 0 ? 'costs' : 'signal';
 }
 
 export interface TimeframeMatrixResult {
@@ -110,9 +151,32 @@ export function analyseTimeframeMatrix(params: TimeframeMatrixParams): Timeframe
     return { ...base, verdict: 'n/a', explanation: reason, inconclusiveReason: reason };
   }
 
+  // Gross -> net per cell, with the cost share, so the row shows WHY each cell lands where it does.
   const summary = assessableCells
-    .map((c) => `${c.timeframe} ${(c.metrics as SegmentMetrics).netProfit.toFixed(0)}`)
-    .join(', ');
+    .map((c) => {
+      const net = (c.metrics as SegmentMetrics).netProfit;
+      if (c.costs === null) return `${c.timeframe} ${net.toFixed(0)}`;
+      const share =
+        c.costs.costShareOfGross === null
+          ? ` costs ${c.costs.totalCosts.toFixed(0)}`
+          : ` costs ${(c.costs.costShareOfGross * 100).toFixed(0)}% of gross`;
+      return `${c.timeframe} gross ${c.costs.grossProfit.toFixed(0)} -> net ${net.toFixed(0)}${share}`;
+    })
+    .join('; ');
+
+  const losers = assessableCells.filter((c) => lossCause(c) !== null);
+  const sunkByCosts = losers.filter((c) => lossCause(c) === 'costs');
+  const sunkBySignal = losers.filter((c) => lossCause(c) === 'signal');
+
+  const causeNote =
+    losers.length === 0
+      ? ''
+      : ` Of the ${String(losers.length)} losing cell(s), ` +
+        `${String(sunkByCosts.length)} had a POSITIVE gross and were sunk by costs ` +
+        `(${sunkByCosts.map((c) => c.timeframe).join(', ') || 'none'}), and ` +
+        `${String(sunkBySignal.length)} lost money before costs at all ` +
+        `(${sunkBySignal.map((c) => c.timeframe).join(', ') || 'none'}). Cheaper execution could ` +
+        'rescue the first kind and nothing rescues the second.';
 
   const share = profitable / assessableCells.length;
 
@@ -129,7 +193,7 @@ export function analyseTimeframeMatrix(params: TimeframeMatrixParams): Timeframe
       explanation:
         `${params.baseTimeframe} is the ONLY timeframe of ${String(assessableCells.length)} tested ` +
         `that makes money: ${summary}. An edge that exists at one bar size and vanishes at its ` +
-        'neighbours is a property of that bar size, not of the market.',
+        `neighbours is a property of that bar size, not of the market.${causeNote}`,
       inconclusiveReason: null,
     };
   }
@@ -142,7 +206,8 @@ export function analyseTimeframeMatrix(params: TimeframeMatrixParams): Timeframe
       verdict: 'warn',
       explanation:
         `${String(profitable)} of ${String(assessableCells.length)} timeframes make money: ` +
-        `${summary}. The edge does not carry across bar sizes, though it is not confined to one.`,
+        `${summary}. The edge does not carry across bar sizes, though it is not confined to ` +
+        `one.${causeNote}`,
       inconclusiveReason: null,
     };
   }
@@ -150,7 +215,9 @@ export function analyseTimeframeMatrix(params: TimeframeMatrixParams): Timeframe
   return {
     ...base,
     verdict: 'pass',
-    explanation: `${String(profitable)} of ${String(assessableCells.length)} timeframes make money: ${summary}.`,
+    explanation:
+      `${String(profitable)} of ${String(assessableCells.length)} timeframes make money: ` +
+      `${summary}.${causeNote}`,
     inconclusiveReason: null,
   };
 }

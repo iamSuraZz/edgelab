@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import type { SegmentMetrics } from './oos-split';
-import { analyseTimeframeMatrix, cellAvailability, type MatrixCell } from './timeframe-matrix';
+import {
+  analyseTimeframeMatrix,
+  cellAvailability,
+  lossCause,
+  type MatrixCell,
+} from './timeframe-matrix';
 
 /**
  * The finding this exists for is a base timeframe that stands alone. The trap is treating the matrix
@@ -26,8 +31,25 @@ function seg(over: Partial<SegmentMetrics> = {}): SegmentMetrics {
   };
 }
 
-function cell(timeframe: string, netProfit: number, trades = 40): MatrixCell {
-  return { timeframe, status: 'ok', reason: null, metrics: seg({ netProfit, trades }) };
+/** `gross` defaults above net, so an unspecified losing cell reads as sunk by costs. */
+function cell(
+  timeframe: string,
+  netProfit: number,
+  trades = 40,
+  gross = netProfit + 500,
+): MatrixCell {
+  const totalCosts = gross - netProfit;
+  return {
+    timeframe,
+    status: 'ok',
+    reason: null,
+    metrics: seg({ netProfit, trades }),
+    costs: {
+      grossProfit: gross,
+      totalCosts,
+      costShareOfGross: gross > 0 ? totalCosts / gross : null,
+    },
+  };
 }
 
 describe('cellAvailability', () => {
@@ -111,7 +133,7 @@ describe('analyseTimeframeMatrix', () => {
     const r = analyseTimeframeMatrix({
       baseTimeframe: 'H1',
       cells: [
-        { timeframe: 'D1', status: 'n/a', reason: 'requests H1', metrics: null },
+        { timeframe: 'D1', status: 'n/a', reason: 'requests H1', metrics: null, costs: null },
         cell('M30', 700),
         cell('H1', 1200),
       ],
@@ -140,5 +162,64 @@ describe('analyseTimeframeMatrix', () => {
 
     expect(r.verdict).toBe('n/a');
     expect(r.inconclusiveReason).toContain('one cell is just the original run');
+  });
+});
+
+describe('gross against net per cell', () => {
+  it('distinguishes a cell sunk by COSTS from one with no signal', () => {
+    const r = analyseTimeframeMatrix({
+      baseTimeframe: 'H1',
+      cells: [
+        // Made 900 gross, paid 1400 in costs: the edge is real and too small to pay for itself.
+        cell('M15', -500, 40, 900),
+        // Lost before costs were charged at all.
+        cell('M30', -800, 40, -300),
+        cell('H1', 1200, 40, 1700),
+        cell('H4', 400, 40, 700),
+      ],
+    });
+
+    expect(r.explanation).toContain('1 had a POSITIVE gross and were sunk by costs (M15)');
+    expect(r.explanation).toContain('1 lost money before costs at all (M30)');
+    expect(r.explanation).toContain('nothing rescues the second');
+  });
+
+  it('shows gross, net and the cost share in the row', () => {
+    const r = analyseTimeframeMatrix({
+      baseTimeframe: 'H1',
+      cells: [cell('H1', 1000, 40, 2000), cell('H4', 500, 40, 1000)],
+    });
+
+    expect(r.explanation).toContain('H1 gross 2000 -> net 1000 costs 50% of gross');
+  });
+
+  it('classifies the cause per cell', () => {
+    expect(lossCause(cell('M15', -500, 40, 900))).toBe('costs');
+    expect(lossCause(cell('M15', -500, 40, -100))).toBe('signal');
+    expect(lossCause(cell('H1', 500, 40, 900))).toBeNull();
+  });
+
+  it('says nothing about causes when every cell made money', () => {
+    const r = analyseTimeframeMatrix({
+      baseTimeframe: 'H1',
+      cells: [cell('H1', 1000), cell('H4', 500)],
+    });
+    expect(r.explanation).not.toContain('losing cell');
+  });
+
+  it('withholds the cost share when gross is not positive', () => {
+    // A share against a negative gross flips sign and reads as though costs were a credit.
+    expect(cell('H1', -500, 40, 0).costs!.costShareOfGross).toBeNull();
+    expect(cell('H1', -500, 40, -300).costs!.costShareOfGross).toBeNull();
+    expect(cell('H1', 500, 40, 1000).costs!.costShareOfGross).toBeCloseTo(0.5, 9);
+  });
+
+  it('shows the cost amount instead when the share would be undefined', () => {
+    const r = analyseTimeframeMatrix({
+      baseTimeframe: 'H1',
+      cells: [cell('M15', -4374, 40, -3200), cell('H1', 1500, 40, 1855)],
+    });
+    expect(r.explanation).toContain('M15 gross -3200 -> net -4374 costs 1174');
+    expect(r.explanation).not.toContain('-37%');
   });
 });

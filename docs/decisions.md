@@ -1804,12 +1804,43 @@ printed in the cell. Verified on `macd-htf-filter`, which requests H4:
 
 Measured on the 2022 H1 data, and both fixtures tell the same story from different angles:
 
-| fixture            | M15    | M30   | H1    | H4  | D1  | verdict |
-| ------------------ | ------ | ----- | ----- | --- | --- | ------- |
-| rsi-mean-reversion | -4,374 | -824  | 1,500 | 461 | —   | warn    |
+| fixture            | M15    | M30    | H1    | H4  | D1  | verdict |
+| ------------------ | ------ | ------ | ----- | --- | --- | ------- |
+| rsi-mean-reversion | -4,374 | -824   | 1,500 | 461 | —   | warn    |
 | macd-htf-filter    | -297   | -1,940 | 4,066 | 945 | n/a | warn    |
 
 Both make money on H1 and H4 and lose on the shorter bars, which is a coherent shape rather than a
-single spike — hence `warn` and not `fail`. That the loss grows as the bars shrink is what one would
-expect if costs, not the signal, were doing the work down there; the cost stress (A27) is the check
-that answers whether that is so.
+single spike — hence `warn` and not `fail`. **The closing claim of the first version of this entry —
+that costs were probably doing the work on the short bars, and that the cost stress would settle it —
+was wrong twice over, and A45 corrects it.**
+
+## A45 · Each matrix cell reports gross beside net
+
+The cost stress (A27) runs on the BASE timeframe only, so it cannot say whether costs or the signal
+sink the shorter-bar cells — which is the first question a row that worsens as bars shrink provokes.
+Gross against net answers it from figures each cell already produced, at no extra run, and the
+verdict text now names which of the two it is.
+
+**It immediately disproved A44's speculation.** That entry guessed costs were doing the work on the
+short bars. Measured:
+
+| fixture            | cell | gross  | net    | costs        |
+| ------------------ | ---- | ------ | ------ | ------------ |
+| rsi-mean-reversion | M15  | -3,200 | -4,374 | 1,174        |
+|                    | M30  | -206   | -824   | 618          |
+|                    | H1   | +1,855 | +1,500 | 19% of gross |
+|                    | H4   | +564   | +461   | 18% of gross |
+| macd-htf-filter    | M15  | -83    | -297   | 214          |
+|                    | M30  | -1,715 | -1,940 | 225          |
+|                    | H1   | +4,160 | +4,066 | 2% of gross  |
+|                    | H4   | +999   | +945   | 5% of gross  |
+
+**Zero cells were sunk by costs. Both fixtures lose money GROSS on M15 and M30** — the signal itself
+fails at those bar sizes, and no amount of cheaper execution would rescue either. Costs do about what
+one would expect for the trade counts involved. The distinction matters because the two call for
+opposite responses, and a row saying only "loses on M15" withholds the half that decides what to do.
+
+One denominator guard, in the same family as A24, A32 and A36: the cost share is reported only when
+gross is strictly POSITIVE. Against a negative gross the ratio flips sign and reads as though costs
+were a credit — the first run printed "M15 costs -37% of gross" on a cell that lost 3,200 before
+costs. It now prints the cost amount instead.

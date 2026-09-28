@@ -723,6 +723,7 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
         status: 'n/a',
         reason: availability.reason,
         metrics: null,
+        costs: null,
       });
       continue;
     }
@@ -744,6 +745,17 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
         winRatePct: cellRun.metrics.trades.all.winRatePct,
         maxDrawdownPct: cellRun.metrics.risk.intrabar.maxDrawdownPct,
         expectancy: cellRun.metrics.trades.all.expectancy,
+      },
+      // Gross against net, from figures this run already produced. The cost stress (A27) only ever
+      // sees the BASE timeframe, so without this the row cannot say whether costs or the signal
+      // sink the shorter bars.
+      costs: {
+        grossProfit: cellRun.metrics.costs.grossBeforeCosts,
+        totalCosts: cellRun.metrics.costs.totalCosts,
+        costShareOfGross:
+          cellRun.metrics.costs.grossBeforeCosts > 0
+            ? cellRun.metrics.costs.totalCosts / cellRun.metrics.costs.grossBeforeCosts
+            : null,
       },
     });
   }
