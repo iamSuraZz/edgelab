@@ -9,6 +9,7 @@ import {
   auditFills,
   checkBidAskAsymmetry,
   describePerFill,
+  ExitLevelIndex,
   replayIntrabar,
   type IntrabarReplayResult,
   levelExitIdsFromSource,
@@ -340,6 +341,25 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
     valuePerTickPerLot: symbolRow.mintick * symbolRow.contractSize * symbolRow.pointValue,
   });
 
+  // Levels come from the ORDER LOG, which records every strategy.exit call with its arguments
+  // already resolved at that bar — so an ATR stop arrives as a number. Clustering exit prices only
+  // ever worked for a fixed bracket, and would report n/a on exactly the strategies whose stops are
+  // worth checking.
+  const exitLevels = new ExitLevelIndex(full.engineResult.orderLog);
+
+  // Chart-bar index for an instant, so a level set at one bar's close applies from the next.
+  const chartBars = full.engineResult.bars;
+  const barIndexAt = (atMs: number): number => {
+    let lo = 0;
+    let hi = chartBars.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (chartBars[mid]!.time <= atMs) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo - 1;
+  };
+
   /* ------------------------------------------ bid/ask asymmetry (spec 06 §2) */
 
   // Which exits rested in the book, read from the SOURCE rather than guessed from prices: a
@@ -368,6 +388,22 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
     valuePerPricePerLot: symbolRow.contractSize * symbolRow.pointValue,
     scale: { mintick: symbolRow.mintick, pipSize: symbolRow.pipSize },
     isLevelExit,
+    // Which level the exit was, from the order log rather than from the sign of the P&L: a
+    // trailing stop exits in profit and is still a stop.
+    kindOf: (seq) => {
+      const t = full.trades[seq - 1];
+      if (t === undefined || exitLevels.size === 0) return null;
+      const lv = exitLevels.levelsOnBar(
+        t.exitBar,
+        { side: t.side, entryPrice: t.entryPrice, mintick: symbolRow.mintick },
+        t.entryBar,
+      );
+      if (lv === null) return null;
+      const dStop = lv.stop === null ? Infinity : Math.abs(t.exitPrice - lv.stop);
+      const dTarget = lv.target === null ? Infinity : Math.abs(t.exitPrice - lv.target);
+      if (!Number.isFinite(dStop) && !Number.isFinite(dTarget)) return null;
+      return dStop <= dTarget ? 'stop' : 'target';
+    },
   });
 
   /* --------------------------------------- M1 intrabar replay (spec 06 §2) */
@@ -382,6 +418,7 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
       entryMs: t.entryTime,
       exitPrice: t.exitPrice,
       exitMs: t.exitTime,
+      entryBar: t.entryBar,
       netPnl: t.netPnl,
     })),
     m1,
@@ -391,6 +428,21 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
     scale: { mintick: symbolRow.mintick, pipSize: symbolRow.pipSize },
     // A trade's exitMs is its exit BAR's open, so the replay walks to that bar's close.
     chartBarMs: tfMs,
+    levelsAt:
+      exitLevels.size === 0
+        ? undefined
+        : (trade, atMs) =>
+            exitLevels.levelsOnBar(
+              barIndexAt(atMs),
+              {
+                side: trade.side,
+                entryPrice: trade.entryPrice,
+                mintick: symbolRow.mintick,
+              },
+              // Never inherit the previous position's levels: an absolute stop is derived from
+              // strategy.position_avg_price and means nothing for a different trade.
+              trade.entryBar,
+            ),
     isLevelExit,
   });
 

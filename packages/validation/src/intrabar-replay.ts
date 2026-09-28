@@ -1,5 +1,6 @@
 import { deriveQuotes, type Bar, type Lots, type Price, type PriceBasis } from '@edgelab/shared';
 
+import { type ResolvedLevels } from './exit-levels';
 import { perFillFigures, type InstrumentScale, type PerFillFigures } from './per-fill';
 
 /**
@@ -38,6 +39,8 @@ export interface ReplayTrade {
   readonly entryMs: number;
   readonly exitPrice: Price;
   readonly exitMs: number;
+  /** Chart-bar index of the entry, so level lookups cannot reach into the previous position. */
+  readonly entryBar?: number;
   readonly netPnl: number;
 }
 
@@ -140,6 +143,10 @@ export interface IntrabarReplayResult {
   readonly rows: readonly ReplayRow[];
   readonly assessed: number;
   readonly skipped: number;
+  /** Trades whose levels trail, and so cannot be replayed as fixed levels. */
+  readonly trailing: number;
+  /** Where the levels came from. `clustered` is the degraded path. */
+  readonly levelSource: 'order-log' | 'clustered' | 'none';
   readonly levels: BracketLevels | null;
   readonly phantomTargets: number;
   readonly missedStops: number;
@@ -169,23 +176,44 @@ export interface IntrabarReplayParams {
    * are exact by construction.
    */
   readonly chartBarMs: number;
-  /** Levels, when the caller already knows them. Inferred from the trades when omitted. */
+  /**
+   * The authoritative level source: the run's order log, resolved per trade and per bar.
+   *
+   * Returns null when no exit call had been made yet, and `trailing: true` when the call carried a
+   * `trail_*` argument — those trades are reported n/a rather than replayed against a level that
+   * depends on a path this cannot reconstruct.
+   *
+   * When absent, the check falls back to clustering exit prices, which only works for a fixed
+   * bracket. The fallback exists so a run recorded before the order log was wired still produces
+   * something; it is not the intended path.
+   */
+  readonly levelsAt?: (trade: ReplayTrade, atMs: number) => ResolvedLevels | null;
+  /** Clustered levels, for the fallback. Inferred from the trades when omitted. */
   readonly levels?: BracketLevels | null;
   /** Which trades closed on a resting order. Only those have levels to replay. */
   readonly isLevelExit?: (seq: number) => boolean;
 }
 
 export function replayIntrabar(params: IntrabarReplayParams): IntrabarReplayResult {
-  const { trades, m1, basis, spreadAt, valuePerPricePerLot, scale, isLevelExit } = params;
+  const { trades, m1, basis, spreadAt, valuePerPricePerLot, scale, isLevelExit, levelsAt } = params;
 
   const levelTrades = trades.filter((t) => isLevelExit?.(t.seq) ?? true);
-  const levels = params.levels ?? inferBracketLevels(levelTrades, scale.mintick * 2);
 
-  if (levels === null || levelTrades.length === 0) {
+  // The order log is authoritative. Clustering is only consulted when there is no log to read.
+  const levels =
+    levelsAt !== undefined
+      ? null
+      : (params.levels ?? inferBracketLevels(levelTrades, scale.mintick * 2));
+  const levelSource: 'order-log' | 'clustered' | 'none' =
+    levelsAt !== undefined ? 'order-log' : levels !== null ? 'clustered' : 'none';
+
+  if (levelSource === 'none' || levelTrades.length === 0) {
     return {
       rows: [],
       assessed: 0,
       skipped: trades.length,
+      trailing: 0,
+      levelSource,
       levels,
       phantomTargets: 0,
       missedStops: 0,
@@ -203,25 +231,41 @@ export function replayIntrabar(params: IntrabarReplayParams): IntrabarReplayResu
 
   const rows: ReplayRow[] = [];
   let skipped = trades.length - levelTrades.length;
+  let trailing = 0;
 
   for (const t of levelTrades) {
-    const stop =
-      t.side === 'long' ? t.entryPrice - levels.stopDistance : t.entryPrice + levels.stopDistance;
-    const target =
-      t.side === 'long'
-        ? t.entryPrice + levels.targetDistance
-        : t.entryPrice - levels.targetDistance;
+    // Levels are re-read at every minute rather than fixed per trade, because an ATR or swing stop
+    // moves while the position is open. A fixed bracket simply returns the same pair every time.
+    const levelsFor =
+      levelsAt ??
+      ((trade: ReplayTrade): ResolvedLevels => ({
+        stop:
+          trade.side === 'long'
+            ? trade.entryPrice - levels!.stopDistance
+            : trade.entryPrice + levels!.stopDistance,
+        target:
+          trade.side === 'long'
+            ? trade.entryPrice + levels!.targetDistance
+            : trade.entryPrice - levels!.targetDistance,
+        trailing: false,
+        setOnBar: -1,
+      }));
 
     const touch = firstTouch({
       trade: t,
       m1,
       basis,
       spreadAt,
-      stop,
-      target,
+      levelsFor,
       untilMs: t.exitMs + params.chartBarMs,
     });
+
     if (touch === 'no-bars') {
+      skipped += 1;
+      continue;
+    }
+    if (touch === 'trailing') {
+      trailing += 1;
       skipped += 1;
       continue;
     }
@@ -272,6 +316,8 @@ export function replayIntrabar(params: IntrabarReplayParams): IntrabarReplayResu
     rows,
     assessed: rows.length,
     skipped,
+    trailing,
+    levelSource,
     levels,
     phantomTargets: rows.filter((r) => r.flip === 'phantom-target').length,
     missedStops: rows.filter((r) => r.flip === 'missed-stop').length,
@@ -283,9 +329,16 @@ export function replayIntrabar(params: IntrabarReplayParams): IntrabarReplayResu
     ),
     explanation:
       `Replayed ${String(rows.length)} resting-order exits on M1, with sells triggering on the bid ` +
-      `and buys on the ask. Levels recovered from the run: stop ${levels.stopDistance.toFixed(5)}, ` +
-      `target ${levels.targetDistance.toFixed(5)} from entry ` +
-      `(${String(levels.outliers)} exit(s) matched neither and were replayed anyway).`,
+      `and buys on the ask. ` +
+      (levels === null
+        ? 'Levels read from the order log, resolved per bar against each trade’s entry price.'
+        : `Levels CLUSTERED from exit prices (no order log): stop ${levels.stopDistance.toFixed(5)}, ` +
+          `target ${levels.targetDistance.toFixed(5)} from entry, ` +
+          `${String(levels.outliers)} exit(s) matched neither.`) +
+      (trailing > 0
+        ? ` ${String(trailing)} trade(s) use a trailing stop and are n/a: a trail depends on the ` +
+          'path taken since it armed, so replaying it as a fixed level would manufacture flips.'
+        : ''),
   };
 }
 
@@ -294,8 +347,7 @@ interface TouchParams {
   readonly m1: readonly Bar[];
   readonly basis: PriceBasis;
   readonly spreadAt: (bar: Bar) => number;
-  readonly stop: number;
-  readonly target: number;
+  readonly levelsFor: (trade: ReplayTrade, atMs: number) => ResolvedLevels | null;
   /** Exclusive end of the holding period: the exit bar's CLOSE, not its open. */
   readonly untilMs: number;
 }
@@ -317,8 +369,8 @@ interface Touch {
  * the same ambiguity a step up, and there is no deeper data to appeal to — so the tie goes to the
  * pessimistic reading, which is the only direction that cannot flatter a result.
  */
-function firstTouch(p: TouchParams): Touch | null | 'no-bars' {
-  const { trade, m1, basis, spreadAt, stop, target, untilMs } = p;
+function firstTouch(p: TouchParams): Touch | null | 'no-bars' | 'trailing' {
+  const { trade, m1, basis, spreadAt, levelsFor, untilMs } = p;
 
   let index = lowerBound(m1, trade.entryMs);
   if (index >= m1.length || m1[index]!.time >= untilMs) return 'no-bars';
@@ -327,13 +379,21 @@ function firstTouch(p: TouchParams): Touch | null | 'no-bars' {
     const bar = m1[index]!;
     if (bar.time >= untilMs) break;
 
+    const levels = levelsFor(trade, bar.time);
+    // Before the strategy first armed its bracket there is nothing resting to hit.
+    if (levels === null) continue;
+    if (levels.trailing) return 'trailing';
+
     const q = deriveQuotes(bar, basis, spreadAt(bar));
 
     // Both of a long's exits are SELLS and fill on the bid; both of a short's are BUYS on the ask.
     const side = trade.side === 'long' ? q.bid : q.ask;
 
-    const stopHit = trade.side === 'long' ? side.low <= stop : side.high >= stop;
-    const targetHit = trade.side === 'long' ? side.high >= target : side.low <= target;
+    const { stop, target } = levels;
+
+    const stopHit = stop !== null && (trade.side === 'long' ? side.low <= stop : side.high >= stop);
+    const targetHit =
+      target !== null && (trade.side === 'long' ? side.high >= target : side.low <= target);
 
     if (stopHit) return { kind: 'stop', price: stop, atMs: bar.time };
     if (targetHit) return { kind: 'target', price: target, atMs: bar.time };

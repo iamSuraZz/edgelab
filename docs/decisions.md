@@ -1073,3 +1073,71 @@ textbook intrabar ambiguity, and the engine resolved it OPTIMISTICALLY.
 exact by construction. A trade's `exitMs` is its exit BAR's open time (this repo's convention), and
 the level that closed the trade was reached somewhere INSIDE that bar — so the replay has to walk to
 the bar's CLOSE. The implausible number is what exposed it, which is the argument for A21.
+
+## A23 · Levels come from the order log, not from clustering exit prices
+
+A22 recovered stop and target levels by clustering exit distances. That works for a fixed bracket and
+is useless for most real strategies: an ATR stop, a percentage stop, a swing-level stop or a trailing
+stop produces a different level on every trade, the clusters never form, and both execution checks
+report `n/a` — precisely on the strategies whose stops are worth checking.
+
+The order log already records every `strategy.exit` call with its arguments RESOLVED at that bar, so
+an ATR expression arrives as a number. It is now the authoritative source for the M1 replay and for
+the asymmetry check's stop-versus-target classification. Clustering survives only as a fallback for a
+run with no order log.
+
+Measured on the new `atr-bracket` fixture, EURUSD H1 2022-01-01 .. 2024-01-01: **183 distinct adverse
+exit distances across 296 trades**, spanning 0 to 0.00976. Clustering's supermajority vote returns
+null on that, so both checks would have said `n/a`. With the order log both produce results — 3
+asymmetry flips and 4 replay flips out of 102 level exits.
+
+Four things this required getting right, three of which were only visible on real data:
+
+1. **`profit`/`loss` are TICKS from the entry; `stop`/`limit` are absolute prices.** Tick distances
+   are resolved against the trade's own entry price. An absolute price wins when both are given,
+   which is Pine's own precedence.
+2. **A level set on bar N applies from bar N+1.** Pine runs the script at the bar's close, so the
+   resting order it creates cannot be hit on the bar that created it.
+3. **An exit call that UPDATES an order reports `noop`, not `placed`,** because PineTS's
+   `pending_orders` does not grow. Filtering the log to `placed` would discard every level update —
+   the entire ATR case. Only our own `suppressed` rows are excluded.
+4. **Absolute levels are scoped to the position; tick levels are not.** An absolute stop is derived
+   from `strategy.position_avg_price`, so a row belonging to the previous position is a different
+   price entirely. Ignoring that reported **56 of 102** ATR exits as missed stops. Applying the same
+   bound to TICK levels then skipped the entry bar of every fixed-bracket trade and turned
+   unassessable trades into false phantom targets — 39 instead of 10. Only the absolute form needs
+   the bound, and the fixed-bracket run reproducing its clustered baseline **exactly** (14 flips, 4
+   missed stops, 10 phantom targets, -850.00) is what proves the distinction is right.
+
+**Trailing stops are reported `n/a` explicitly.** A trail's level depends on the path taken since it
+armed, so it is not a level until simulated, and replaying it as a fixed one would manufacture flips.
+The spec allowed either simulating or declining; declining is the conservative option and the failure
+mode of the alternative is inventing findings, which is the one thing these checks must never do.
+
+Known limitation, reported rather than hidden: when a script uses several exit ids the most recent
+call wins. `ExitLevelIndex.distinctIds` counts them so a multi-bracket script is visible.
+
+## A24 · Recorded ahead of the remaining steps
+
+Four constraints for work not yet started, recorded now so they are not rediscovered late.
+
+**OOS split — run the out-of-sample segment as its own run from initial capital**, with warmup
+supplied through the gate rather than by slicing the full run's bars. Slicing is the obvious
+implementation and it is wrong under any equity-proportional sizing: the OOS slice inherits position
+sizes grown by in-sample profits, so a strategy looks better out of sample exactly when it did well
+in sample. A separate run from the same starting capital is the only comparison that means anything.
+
+**Walk-forward — WFE is `n/a` when the in-sample return is <= 0.** Walk-forward efficiency is
+out-of-sample return over in-sample return. Two negatives divide into a flattering positive, so a
+strategy that lost money in both halves would report an encouraging number. Undefined is the honest
+answer, and this repo already says a genuinely undefined metric is `null` and never 0.
+
+**Sealed holdout — the seal has to hold everywhere data is read**, not only in the validation runner:
+the Studio's date presets, the timeframe matrix and walk-forward all load bars, and a seal that only
+one path honours is not a seal. The unseal count is only meaningful if every reader goes through the
+same gate.
+
+**Regimes — label each trade with the regime known at its ENTRY**, computed from D1 values up to the
+previous day's close. Classifying a trade by the regime of the day it ran in uses that day's close to
+describe a decision taken before it, which is look-ahead inside the very report meant to detect
+look-ahead.

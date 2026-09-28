@@ -99,6 +99,40 @@ if dir > 0 and dir[1] <= 0
 plot(st, title="Supertrend", color=dir < 0 ? color.green : color.red)
 `;
 
+const ATR_BRACKET = `//@version=5
+strategy("ATR Bracket", overlay=true, initial_capital=10000,
+     default_qty_type=strategy.fixed, default_qty_value=1)
+
+emaLen   = input.int(20, "EMA length", minval=2, group="Signal")
+atrLen   = input.int(14, "ATR length", minval=2, group="Exits")
+slMult   = input.float(1.5, "Stop (x ATR)", minval=0.1, group="Exits")
+tpMult   = input.float(3.0, "Target (x ATR)", minval=0.1, group="Exits")
+
+e = ta.ema(close, emaLen)
+a = ta.atr(atrLen)
+
+if ta.crossover(close, e)
+    strategy.entry("Long", strategy.long)
+
+if ta.crossunder(close, e)
+    strategy.entry("Short", strategy.short)
+
+// Levels move with volatility, so they never form two tight clusters: the only way to know them
+// is the order log. This is the fixture that proves the checks do not fall back to n/a on a
+// strategy whose stop is not a fixed number of ticks.
+longStop  = strategy.position_avg_price - a * slMult
+longTP    = strategy.position_avg_price + a * tpMult
+shortStop = strategy.position_avg_price + a * slMult
+shortTP   = strategy.position_avg_price - a * tpMult
+
+if strategy.position_size > 0
+    strategy.exit("AtrBracket", from_entry="Long", stop=longStop, limit=longTP)
+if strategy.position_size < 0
+    strategy.exit("AtrBracket", from_entry="Short", stop=shortStop, limit=shortTP)
+
+plot(e, title="EMA", color=color.orange)
+`;
+
 const MACD_HTF_FILTER = `//@version=5
 strategy("MACD with HTF trend filter", overlay=true, initial_capital=10000,
      default_qty_type=strategy.fixed, default_qty_value=1)
@@ -182,6 +216,15 @@ export const STRATEGY_FIXTURES: readonly StrategyFixture[] = [
     description:
       'MACD crossovers filtered by a higher-timeframe EMA via request.security, in non-repainting form.',
     source: MACD_HTF_FILTER,
+  },
+  {
+    id: 'atr-bracket',
+    name: 'ATR Bracket',
+    description:
+      'EMA cross with volatility-scaled stop and target, set as PRICES via strategy.exit. Its ' +
+      'levels move every bar, so they cannot be recovered by clustering exit prices — this is the ' +
+      'fixture that exercises reading them from the order log.',
+    source: ATR_BRACKET,
   },
   {
     id: 'donchian-trailing',

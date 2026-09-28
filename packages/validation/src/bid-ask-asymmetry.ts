@@ -98,6 +98,15 @@ export interface AsymmetryParams {
    * assuming every exit is a stop is exactly how a check starts reporting confident nonsense.
    */
   readonly isLevelExit?: (seq: number) => boolean;
+  /**
+   * Which level a trade actually exited on, from the order log.
+   *
+   * Without it the check falls back to "favourable means target", which is right for a fixed
+   * bracket and wrong for a trailing stop — those exit ABOVE the entry on a long and are still
+   * stops. Only the flip rule depends on this, since a stop moves in the direction that triggers it
+   * sooner and so can never vanish.
+   */
+  readonly kindOf?: (seq: number) => LevelKind | null;
 }
 
 export interface AsymmetryResult {
@@ -152,9 +161,10 @@ export function checkBidAskAsymmetry(params: AsymmetryParams): AsymmetryResult {
     const requiredStoredPrice = t.exitPrice - offset;
     const priceError = Math.abs(offset);
 
-    // A long exiting ABOVE its entry took a target; below, a stop. Same for a short, mirrored.
+    // The order log knows which level this was. Falling back to "favourable means target" only
+    // when it does not.
     const favourable = t.side === 'long' ? t.exitPrice > t.entryPrice : t.exitPrice < t.entryPrice;
-    const kind: LevelKind = favourable ? 'target' : 'stop';
+    const kind: LevelKind = params.kindOf?.(t.seq) ?? (favourable ? 'target' : 'stop');
 
     // Did the bar actually get there? A target needs the stored price to run FURTHER in the
     // favourable direction; a stop triggers earlier, so it always still triggers.
