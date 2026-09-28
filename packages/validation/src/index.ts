@@ -13,3 +13,5 @@ export * from './future-splice';
 export * from './bid-ask-asymmetry';
 export * from './fill-audit';
 export * from './rolling-oos';
+export * from './wf-optimization';
+export * from './wf-optimization-report';

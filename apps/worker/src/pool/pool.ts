@@ -19,7 +19,7 @@ import type { PingInput, PingOutput } from './tasks/ping';
  * running under tsx in dev, `.js` when running the compiled output. Hard-coding
  * either one breaks the other.
  */
-function taskPath(name: string): string {
+export function taskPath(name: string): string {
   return path.resolve(__dirname, 'tasks', `${name}${path.extname(__filename)}`);
 }
 

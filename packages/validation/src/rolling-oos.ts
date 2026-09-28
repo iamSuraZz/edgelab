@@ -40,15 +40,18 @@ export interface RollingOosFold {
   readonly inSample: SegmentMetrics;
   readonly outOfSample: SegmentMetrics;
   /**
-   * Walk-forward efficiency: out-of-sample return over in-sample return.
+   * Out-of-sample return over in-sample return, for this fold.
+   *
+   * Deliberately NOT called walk-forward efficiency: WFE measures how well an OPTIMISED parameter
+   * set generalises, and nothing is optimised here. This is retention of a fixed set's performance.
    *
    * Null when the in-sample return was not strictly positive (A24). Two losses divide into a
    * flattering positive number, and a fold that lost money in training had no edge to carry
-   * forward — there is nothing to be efficient about.
+   * forward — there is nothing to retain.
    */
-  readonly wfe: number | null;
+  readonly retention: number | null;
   /** False when the in-sample return was positive but too small for the ratio to mean anything. */
-  readonly wfeStable: boolean;
+  readonly retentionStable: boolean;
   /** True when this fold trained profitably. Only these folds can be said to have survived or not. */
   readonly hadEdge: boolean;
   /** True when it had an edge AND kept it out of sample. */
@@ -67,7 +70,7 @@ export interface RollingOosResult {
   /** Share of edge-bearing folds that kept the edge. Null when no fold had an edge. */
   readonly consistency: number | null;
   /** Median WFE across folds where it is defined and stable. Null when there are none. */
-  readonly medianWfe: number | null;
+  readonly medianRetention: number | null;
   /** Total out-of-sample trades across assessable folds. */
   readonly totalOosTrades: number;
   readonly verdict: RollingOosVerdict;
@@ -99,15 +102,15 @@ export function analyseRollingOos(params: RollingOosParams): RollingOosResult {
     const oosReturn = f.outOfSample.returnPct;
 
     const hadEdge = assessable && f.inSample.netProfit > 0;
-    const wfe =
+    const retention =
       isReturn === null || oosReturn === null || !(isReturn > 0) ? null : oosReturn / isReturn;
 
     return {
       index,
       inSample: f.inSample,
       outOfSample: f.outOfSample,
-      wfe,
-      wfeStable: (isReturn ?? 0) >= minStable,
+      retention,
+      retentionStable: (isReturn ?? 0) >= minStable,
       hadEdge,
       survived: hadEdge && f.outOfSample.netProfit > 0,
       assessable,
@@ -121,10 +124,10 @@ export function analyseRollingOos(params: RollingOosParams): RollingOosResult {
     .filter((f) => f.assessable)
     .reduce((n, f) => n + f.outOfSample.trades, 0);
 
-  const usableWfe = folds
-    .filter((f) => f.assessable && f.wfe !== null && f.wfeStable)
-    .map((f) => f.wfe as number);
-  const medianWfe = median(usableWfe);
+  const usableRetention = folds
+    .filter((f) => f.assessable && f.retention !== null && f.retentionStable)
+    .map((f) => f.retention as number);
+  const medianRetention = median(usableRetention);
 
   const consistency = foldsWithEdge === 0 ? null : foldsSurviving / foldsWithEdge;
 
@@ -134,7 +137,7 @@ export function analyseRollingOos(params: RollingOosParams): RollingOosResult {
     foldsWithEdge,
     foldsSurviving,
     consistency,
-    medianWfe,
+    medianRetention,
     totalOosTrades,
   };
 
@@ -161,9 +164,9 @@ export function analyseRollingOos(params: RollingOosParams): RollingOosResult {
   const head =
     `${String(foldsSurviving)} of ${String(foldsWithEdge)} folds that trained profitably stayed ` +
     `profitable out of sample (${(kept * 100).toFixed(0)}%)` +
-    (medianWfe === null
+    (medianRetention === null
       ? ', with no fold whose in-sample return was large enough for a meaningful efficiency ratio'
-      : `, median walk-forward efficiency ${medianWfe.toFixed(2)}`) +
+      : `, median out-of-sample retention ${medianRetention.toFixed(2)}`) +
     `, over ${String(totalOosTrades)} out-of-sample trades.`;
 
   if (kept < 0.5) {
@@ -175,7 +178,7 @@ export function analyseRollingOos(params: RollingOosParams): RollingOosResult {
     };
   }
 
-  if (kept < 0.7 || (medianWfe !== null && medianWfe < 0.5)) {
+  if (kept < 0.7 || (medianRetention !== null && medianRetention < 0.5)) {
     return {
       ...base,
       verdict: 'warn',

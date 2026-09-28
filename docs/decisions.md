@@ -1464,3 +1464,55 @@ the single split and holds in only one fold of two. One split can survive, or fa
 folds are what tell the two apart.
 
 A full validation is now 13 checks and about 30 engine runs, in 2.6s on six months of H1.
+
+## A35 · The rolling check is not walk-forward optimization
+
+A34 shipped rolling folds running the script's OWN input values. That is a useful stability check and
+it stays in the default suite, but calling it walk-forward was wrong: nothing is selected in sample,
+so nothing's GENERALISATION is being tested. A strategy whose inputs were tuned by hand on this very
+data sails through it.
+
+It is now `overfitting-rolling-oos`, "Rolling out-of-sample (fixed parameters)", and its
+out-of-sample-over-in-sample ratio is called RETENTION rather than walk-forward efficiency. WFE is
+reserved for the check where a parameter set was actually chosen.
+
+**Walk-forward optimization is a separate, opt-in check.** Per fold it sweeps up to three inputs,
+picks a winner in sample, and runs that winner out of sample as its own run from initial capital
+(A24). Opt-in because four folds at the 300-combination cap is 1,204 engine runs.
+
+Four decisions inside it, each of which could quietly invalidate the result:
+
+- **The trade floor is applied BEFORE ranking, not as a tiebreak.** A set that took two trades and
+  won both has the best profit factor in almost any grid; letting it win is precisely how an
+  optimiser selects noise.
+- **Above the cap the grid is SAMPLED, not truncated.** Taking the first 300 of an enumerated grid
+  sweeps the first input thoroughly and never moves the last — a search in appearance only. Sampling
+  is seeded, so a spec is reproducible.
+- **Ties break towards the middle of a range.** An extreme of a swept range is more likely a boundary
+  artefact than a real optimum.
+- **Drift is scored on its own account.** A procedure can be profitable and still be fitting noise:
+  if the optimum jumps across half its range every fold, the next fold's winner is a coin flip.
+
+Verified on `rsi-mean-reversion`, EURUSD H1 2022-01-01 .. 2022-07-01, sweeping `rsiLen` 6..24 and
+`oversold` 20..40 for net profit — **FAIL**:
+
+    fold 0: rsiLen=20 oversold=35   IS 13.90% -> OOS -0.31%   WFE -0.02
+    fold 1: rsiLen=24 oversold=30   IS  8.58% -> OOS -0.10%   WFE -0.01
+    fold 2: rsiLen=6  oversold=20   IS 14.73% -> OOS  0.75%   WFE  0.05
+    fold 3: rsiLen=14 oversold=30   IS  7.56% -> OOS  0.47%   WFE  0.06
+
+    drift: rsiLen 20 -> 24 -> 6 -> 14, mean step 56% of range, 4 distinct values in 4 folds
+
+In-sample returns of 8-15% become out-of-sample returns within half a percent of zero — median WFE
+**0.02**, so essentially none of the fitted edge survives. The optimum lands on a different value
+every fold, and the sensitivity grid shows two separate hot cells with a dead zone between them
+rather than a plateau. The same fixture PASSES the single OOS split and only WARNS on the rolling
+check; the optimization is what says the selection procedure is worthless.
+
+**The first ETA was 21x low, and fixing it found a real inefficiency.** Estimating from A33's engine
+model (53ms + 0.042ms/bar) predicted 3.8s for a run that took 79.9s, because that model contains
+neither the M1 read in front of every candidate nor pool startup. Caching bars per thread per window
+— every candidate in a fold reads the SAME window, only the inputs differ — cut it to 24.2s with a
+byte-identical verdict. The estimate is now fitted to two measured runs at 7 threads (40 runs in
+13.8s, 204 in 24.2s): ~11s pool startup plus ~444ms per run per thread. It now predicts 23.9s against
+27.1s actual, which is the right order of accuracy for a progress estimate.

@@ -1406,7 +1406,7 @@ function rollingOosResult(w: RollingOosResult): CheckResult {
     foldsWithEdge: w.foldsWithEdge,
     foldsSurviving: w.foldsSurviving,
     consistencyPct: w.consistency === null ? 0 : Number((w.consistency * 100).toFixed(1)),
-    medianWfe: w.medianWfe === null ? 0 : Number(w.medianWfe.toFixed(3)),
+    medianRetention: w.medianRetention === null ? 0 : Number(w.medianRetention.toFixed(3)),
     outOfSampleTrades: w.totalOosTrades,
   };
 

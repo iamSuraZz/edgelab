@@ -77,7 +77,7 @@ describe('analyseRollingOos — verdicts', () => {
     const thin = { inSample: seg({ returnPct: 10 }), outOfSample: seg({ returnPct: 1 }) };
     const r = analyseRollingOos({ folds: [thin, thin, thin, thin] });
 
-    expect(r.medianWfe).toBeCloseTo(0.1, 9);
+    expect(r.medianRetention).toBeCloseTo(0.1, 9);
     expect(r.verdict).toBe('warn');
   });
 });
@@ -120,7 +120,7 @@ describe('analyseRollingOos — WFE', () => {
     const r = analyseRollingOos({ folds: [both, held, held] });
 
     // -2 / -5 = 0.4 would read as "kept 40%" for a fold that lost money twice.
-    expect(r.folds[0]!.wfe).toBeNull();
+    expect(r.folds[0]!.retention).toBeNull();
   });
 
   it('marks a ratio against a near-zero in-sample return as unstable', () => {
@@ -130,10 +130,10 @@ describe('analyseRollingOos — WFE', () => {
     };
     const r = analyseRollingOos({ folds: [tinyEdge, held, held] });
 
-    expect(r.folds[0]!.wfe).toBeCloseTo(20, 6);
-    expect(r.folds[0]!.wfeStable).toBe(false);
+    expect(r.folds[0]!.retention).toBeCloseTo(20, 6);
+    expect(r.folds[0]!.retentionStable).toBe(false);
     // A 20x outlier must not drag the median that summarises the run.
-    expect(r.medianWfe).toBeCloseTo(0.8, 9);
+    expect(r.medianRetention).toBeCloseTo(0.8, 9);
   });
 
   it('takes the median across folds, not the mean', () => {
@@ -142,6 +142,6 @@ describe('analyseRollingOos — WFE', () => {
     const c = { inSample: seg({ returnPct: 10 }), outOfSample: seg({ returnPct: 9 }) };
 
     const r = analyseRollingOos({ folds: [a, b, c] });
-    expect(r.medianWfe).toBeCloseTo(0.8, 9);
+    expect(r.medianRetention).toBeCloseTo(0.8, 9);
   });
 });
