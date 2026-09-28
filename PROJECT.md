@@ -95,7 +95,7 @@ pnpm run import:file mt5 EURUSD <abs.csv> 120        # 120 = broker server UTC o
 
 ## Current status — NOT v1.0
 
-Green: `build` 9/9, `typecheck` 16/16, `lint` clean, **821 tests** (`pnpm test`).
+Green: `build` 9/9, `typecheck` 16/16, `lint` clean, **840 tests** (`pnpm test`).
 CI runs all five checks on every push — see `.github/workflows/ci.yml`.
 
 **Verified against the real docker stack:**
@@ -170,9 +170,10 @@ roadmap's "in the browser" is NOT met.
 | CI on the public repo (A9)                                         | see badge / Actions tab      |
 | Exness imports + MT5 parity test (A12)                             | **NOT PLANNED** — no exports |
 
-Still to build in step 1, in this order: **cost stress** (the last of execution bias), then OOS
-split, walk-forward (A3 timing first), **sealed holdout** (A17), timeframe matrix + regimes, and
-Monte Carlo. Each must run through `pnpm validate` on the 2022 data before the next starts.
+**Execution bias is COMPLETE.** Still to build in step 1, in this order: OOS split, walk-forward
+(A3 timing first), **sealed holdout** (A17), timeframe matrix + regimes, and Monte Carlo. Each must
+run through `pnpm validate` on the 2022 data before the next starts. A24 records four constraints
+agreed ahead of those steps; A26 records the trailing-stop replay as a post-slice-D follow-up.
 
 **Price basis is now explicit per feed (A19).** `bid` for Dukascopy and MT5 imports, `mid` for Twelve
 Data, `last` for Binance klines (trade prints, treated as mid, labelled separately). `deriveQuotes`
@@ -194,7 +195,17 @@ the price LEVELS, and that is where the asymmetry check finds it.**
 > (+0.65x spread above the bid feed), and the cost overlay assumes bid — so its cost attribution is
 > wrong on this feed even though the total is close.
 
-**Stop and target levels now come from the ORDER LOG, not from clustering exit prices (A23).**
+**Cost stress is done, and its cross-check found a real bug (A27).** The empirical break-even from
+the stress re-runs matches the metrics report's analytical figure **exactly** on a zero-slippage run
+(0.84 pips/side either way, break-even at 5.22x costs). Switching slippage on exposed that
+`slippagePoints` was **never passed to the engine**: total costs rose from 355 to 3,025 while net
+profit did not move, because the waterfall attributed a cost the engine had never charged. Fixed by
+passing it as a strategy prop — the same run then went from +1,499.61 to -1,588.05. Measured while
+fixing it: PineTS charges slippage on BOTH legs, including limit exits, unlike TradingView.
+
+**Stop and target levels now come from the ORDER LOG, not from clustering exit prices (A23), and are
+paired per exit id (A25).** A `partial-exits` fixture with two simultaneous brackets replays 998 of
+1,171 trades against their own bracket's levels with none ambiguous.
 Clustering only ever worked for a fixed bracket; the new `atr-bracket` fixture has 183 distinct
 adverse exit distances across 296 trades, so both execution checks would have reported `n/a` on it.
 Reading `strategy.exit` arguments — already resolved per bar, so an ATR expression arrives as a
@@ -257,7 +268,7 @@ keeping both layers: truncation covers unbounded leaks, splicing covers bounded 
 | **Future-splice (A1b)** — the layer that catches the leak | done, 15 tests, verified    |
 | Fill audit + **bid/ask asymmetry (A20)**                  | done, verified on real data |
 | **M1 intrabar replay (A22)** — missed stops + phantoms    | done, 14 tests, verified    |
-| Cost stress                                               | **not started**             |
+| Cost stress (A27)                                         | done, verified on real data |
 | OOS split, walk-forward, sealed holdout                   | **not started**             |
 | Timeframe matrix, regimes, Monte Carlo                    | **not started**             |
 | `POST /backtests/:id/validate` + SSE (step 2)             | **not started**             |

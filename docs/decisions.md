@@ -1161,11 +1161,11 @@ works, so the n/a fallback is not what carries this case.
 
 Unchanged, as required:
 
-| fixture        | levels        | flips | missed stops | phantom targets |
-| -------------- | ------------- | ----- | ------------ | --------------- |
-| rsi (fixed)    | ticks         | 14    | 4            | 10              |
-| atr-bracket    | ATR prices    | 4     | 0            | 4               |
-| partial-exits  | two ids       | 17    | 10           | 7               |
+| fixture       | levels     | flips | missed stops | phantom targets |
+| ------------- | ---------- | ----- | ------------ | --------------- |
+| rsi (fixed)   | ticks      | 14    | 4            | 10              |
+| atr-bracket   | ATR prices | 4     | 0            | 4               |
+| partial-exits | two ids    | 17    | 10           | 7               |
 
 ## A26 · Follow-up after slice D: trailing-stop replay
 
