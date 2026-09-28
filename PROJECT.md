@@ -95,7 +95,7 @@ pnpm run import:file mt5 EURUSD <abs.csv> 120        # 120 = broker server UTC o
 
 ## Current status — NOT v1.0
 
-Green: `build` 9/9, `typecheck` 16/16, `lint` clean, **869 tests** (`pnpm test`).
+Green: `build` 9/9, `typecheck` 16/16, `lint` clean, **890 tests** (`pnpm test`).
 CI runs all five checks on every push — see `.github/workflows/ci.yml`.
 
 **Verified against the real docker stack:**
@@ -182,8 +182,10 @@ four-fold walk-forward, while `runPretranspiled` bypasses the instrumentation se
 order log (which A23/A28 depend on) and the warmup gate. `setupMs`/`executeMs` are now in
 `EngineStats` and printed by `pnpm backtest`.
 
-**Walk-forward (A34) disagrees with the single OOS split in BOTH directions**, which is why both
-exist. Rolling folds, 4 at a 3:1 ratio, each half its own run from initial capital:
+**The A34 check was renamed to what it is (A35): "Rolling out-of-sample (fixed parameters)".** It
+runs the script's own inputs on rolling folds — a stability check, not walk-forward optimization,
+since nothing is selected in sample. Its ratio is called RETENTION; WFE is reserved for the
+optimization. It disagrees with the single OOS split in BOTH directions, which is why both exist:
 
 | fixture            | OOS split | walk-forward                       |
 | ------------------ | --------- | ---------------------------------- |
@@ -192,6 +194,23 @@ exist. Rolling folds, 4 at a 3:1 ratio, each half its own run from initial capit
 | bollinger-breakout | **fail**  | **fail** — 1 of 3 folds, WFE -0.12 |
 
 A full validation is now **13 checks, ~30 engine runs, 2.6s** on six months of H1.
+
+**Walk-forward OPTIMIZATION is built and opt-in (A35)** — `pnpm optimize <runId> --inputs` prints the
+setup form prefilled from the script's `InputSpec`, `--spec <file>` runs it. Up to three inputs, an
+objective and a trade floor; combinations capped at 300 with seeded SAMPLING above that, never
+truncation. Per fold it picks a winner in sample and runs it out of sample as its own run, then
+reports the stitched OOS equity, WFE, parameter drift and a 2-input sensitivity heatmap. Runs across
+the piscina pool with a measured ETA.
+
+On `rsi-mean-reversion` it **FAILS** where the cheaper checks do not: in-sample returns of 8-15%
+become out-of-sample returns within half a percent of zero (median WFE **0.02**), and the winning
+`rsiLen` lands on a different value every fold — 20, 24, 6, 14, a mean step of 56% of its range. The
+same fixture PASSES the single OOS split and only WARNS on the rolling check.
+
+> The first ETA was **21x low**: A33's engine model omits the M1 read in front of every candidate and
+> pool startup. Caching bars per thread per window cut a 79.9s run to 24.2s with an identical
+> verdict; the estimate is now fitted to two measured runs (~11s startup + ~444ms per run per thread)
+> and predicts 23.9s against 27.1s actual.
 
 **The OOS split discriminates on its first real run.** Each segment is its own run from the same
 starting capital (A24), never a slice — a slice would inherit position sizes grown by in-sample
