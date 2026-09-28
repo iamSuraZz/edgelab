@@ -2,6 +2,7 @@ export * from './fixtures';
 export * from './check';
 export * from './checks';
 export * from './lookahead';
+export * from './cost-stress';
 export * from './exit-levels';
 export * from './intrabar-replay';
 export * from './per-fill';

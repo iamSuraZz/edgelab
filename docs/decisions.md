@@ -1177,3 +1177,53 @@ since it armed, so a simulation that disagrees with the engine on the engine's o
 its own bugs — and it would report them as flips, which is precisely the failure mode every one of
 these checks is built to avoid. Agreement on the coarse series is the only evidence that the finer
 one is telling the truth.
+
+## A27 · Cost stress, cross-checked against the analytical break-even
+
+The stress re-runs the backtest with spread, slippage and financing scaled together and interpolates
+the multiplier at which net profit reaches zero. Zero is in the ladder deliberately: it is the only
+point that separates "costs killed this" from "this never had an edge". The ladder extends to 5x,
+10x and 20x only while the strategy is still alive at the top, so the common case stays cheap.
+
+Surviving every multiplier tested is a **pass**, not `n/a` — it is the strongest result this check
+can give. `n/a` is reserved for a strategy that loses money with execution switched off entirely,
+where there is no cost sensitivity to measure.
+
+**The cross-check.** The metrics report already states a break-even per side analytically, as
+`netProfit / (2 x totalUnits x pointValue)`. Under linear cost scaling with a fixed trade set the two
+are the same quantity, so agreement is the null result and disagreement is the finding. Measured on
+`rsi-mean-reversion`, EURUSD H1 2022-01-01 .. 2022-07-01, no slippage:
+
+    break-even 5.22x actual costs; empirical 0.84 pips/side, analytical 0.84 pips/side
+
+Exact. And it should be: with `slippagePoints: 0` only the spread scales, and the overlay charges
+exactly one spread per round trip on every price basis (A19) — the basis decides which fill carries
+it, not how many. So the basis cannot move this figure.
+
+**The cross-check found a real bug the moment slippage was switched on.** With 15 ticks of slippage
+the same run reported total costs rising from 355 to 3,025 while net profit did not move at all — and
+the break-even disagreed by **751%**. Cause: `config.slippagePoints` was never passed to the engine.
+Slippage has to travel as a strategy PROP, because it moves a fill price and therefore changes which
+orders survive a margin check; the overlay cannot apply it afterwards. Meanwhile the cost waterfall
+attributes `slippageCost` and adds it back to recover gross, asserting it is already inside the
+engine's P&L. It was not. Anyone configuring slippage got overstated total costs, overstated gross,
+and a wrong cost drag, with net profit silently unaffected.
+
+Fixed by passing `slippage: costs.slippagePoints` in the engine overrides (Pine measures it in ticks,
+which is what `slippagePoints` already is). The same run then moved from +1,499.61 to **-1,588.05**.
+
+**Two things measured rather than assumed while doing this.** First, PineTS charges slippage on BOTH
+legs, including a bracket exit resting at its own level — the $3,088 swing over 89 trades is $34.70
+per trade against $15 per fill, 2.3 fills' worth. TradingView documents the opposite for limit
+orders, so this is an engine difference worth recording; the analytical factor of 2 is right here. An
+earlier draft of this check asserted the fill-mix explanation and it was **plausible and wrong**,
+which is the failure mode every check in this slice is built to avoid. Second, Pine's `slippage` prop
+is an int, so the stress quantises it to whole ticks and 0.5x of 15 is 8, not 7.5; the analysis reads
+each run's own reported costs rather than the nominal multiplier, so the rounding appears in the
+numbers instead of being absorbed.
+
+**Residual disagreement, explained.** With slippage on, the two figures sit **6.1%** apart (-0.95
+against -0.89 pips). The named cause is that scaling costs changed the trade set — moving fill prices
+changes which orders survive a margin check — so net profit is not linear in the multiplier while the
+analytical form assumes it is. That non-linearity is itself a result worth reporting: an edge whose
+break-even moves when execution moves is more fragile than a single number suggests.

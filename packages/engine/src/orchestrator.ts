@@ -136,7 +136,18 @@ export async function orchestrateRun(params: OrchestrateParams): Promise<Orchest
     ...(params.inputs === undefined ? {} : { inputs: params.inputs }),
     // Ours first so an explicit caller override still wins, matching how the API merges sizing
     // props. Nothing in the app sets `initial_capital`, so in practice this always applies.
-    overrides: { initial_capital: engineCapital, ...params.overrides },
+    //
+    // `slippage` has to travel as a strategy PROP, because it moves a fill price and so changes
+    // which orders survive a margin check — the cost overlay cannot apply it afterwards. It was
+    // missing, and the effect was silent in the worst way: the waterfall reported slippage as a
+    // charged cost while net profit never moved, so total costs and cost drag were overstated by
+    // whatever slippage was configured. Pine measures it in ticks, which is what `slippagePoints`
+    // already is.
+    overrides: {
+      initial_capital: engineCapital,
+      slippage: params.costs.slippagePoints,
+      ...params.overrides,
+    },
     ...(params.warmupBars === undefined ? {} : { warmupBars: params.warmupBars }),
     ...(params.dataCutoffTs === undefined ? {} : { dataCutoffTs: params.dataCutoffTs }),
     ...(params.recordSecurityCalls === true ? { recordSecurityCalls: true } : {}),

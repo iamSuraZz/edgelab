@@ -7,8 +7,11 @@ import {
   bucketsFromCandles,
   checkCausality,
   auditFills,
+  analyseCostStress,
   checkBidAskAsymmetry,
   describePerFill,
+  type CostStressResult,
+  type StressPoint,
   ExitLevelIndex,
   replayIntrabar,
   type IntrabarReplayResult,
@@ -83,6 +86,25 @@ const CUTOFF_COUNT = 6;
 const SPLICE_WINDOW_FLOOR_MS = 7 * 24 * 60 * 60_000;
 
 /**
+ * Cost multipliers to re-run at, besides the baseline.
+ *
+ * Zero is included deliberately: it is the only point that separates "the costs killed this" from
+ * "this never made money in the first place", and a strategy that loses with execution switched off
+ * has no break-even to find at all.
+ */
+const COST_STRESS_MULTIPLIERS = [0, 0.5, 2, 3] as const;
+
+/**
+ * Extra multipliers tried, in order, while the strategy is still profitable at the top of the
+ * ladder.
+ *
+ * Adaptive rather than a fixed long ladder so the common case stays cheap: most strategies die
+ * within 3x, and only one that survives pays for the extra runs. The cap is a statement in itself —
+ * "survives 20x its own costs" is as much as this check needs to say.
+ */
+const COST_STRESS_EXTENSIONS = [5, 10, 20] as const;
+
+/**
  * How much of the future to replace, sized to the longest timeframe the script actually requests.
  *
  * A fixed week was the first cut and it is not enough. The leak horizon is one bucket of whatever
@@ -116,6 +138,7 @@ export interface ValidationReport {
   readonly sameBar: SameBarBiasEstimate | null;
   readonly asymmetry: AsymmetryResult | null;
   readonly replay: IntrabarReplayResult | null;
+  readonly stress: CostStressResult | null;
   readonly elapsedMs: number;
 }
 
@@ -451,6 +474,78 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
     isLevelExit,
   });
 
+  /* ------------------------------------------ cost stress (spec 06 §2) */
+
+  report(92, 'stressing costs');
+
+  // Scale spread, slippage and financing together. Slippage has to go through the ENGINE, because
+  // it moves a fill price and so changes which orders survive a margin check — which is exactly the
+  // non-linearity the cross-check below is looking for.
+  //
+  // Slippage is QUANTISED to whole ticks, because Pine's `slippage` property is an int and the
+  // engine refuses a fractional one. At fractional multipliers the effective scaling therefore
+  // differs slightly from the nominal — 0.5x of 15 ticks is 8, not 7.5. The analysis reads each
+  // run's OWN reported costs rather than assuming the nominal multiplier, so the rounding shows up
+  // in the numbers instead of being silently absorbed.
+  const scaleCosts = (m: number): typeof costConfig => ({
+    ...costConfig,
+    spread: { ...costConfig.spread, multiplier: costConfig.spread.multiplier * m },
+    slippagePoints: Math.max(0, Math.round(costConfig.slippagePoints * m)),
+  });
+
+  const stressPoints: StressPoint[] = [
+    {
+      multiplier: 1,
+      netProfit: full.metrics.performance.netProfit,
+      totalCosts: full.metrics.costs.totalCosts,
+      trades: full.trades.length,
+    },
+  ];
+
+  const runAt = async (m: number): Promise<StressPoint> => {
+    const stressed = await orchestrateRun({ ...shared, costs: scaleCosts(m) });
+    return {
+      multiplier: m,
+      netProfit: stressed.metrics.performance.netProfit,
+      totalCosts: stressed.metrics.costs.totalCosts,
+      trades: stressed.trades.length,
+    };
+  };
+
+  for (const m of COST_STRESS_MULTIPLIERS) {
+    stressPoints.push(await runAt(m));
+  }
+
+  // Keep climbing only while the edge is still alive at the top of the ladder.
+  for (const m of COST_STRESS_EXTENSIONS) {
+    const highest = stressPoints.reduce((a, b) => (a.multiplier > b.multiplier ? a : b));
+    if (highest.netProfit <= 0) break;
+    stressPoints.push(await runAt(m));
+  }
+
+  // MEASURED, not assumed: PineTS charges slippage on BOTH legs, including a bracket exit that
+  // rests at its own level. Switching slippage from 0 to 15 ticks on the 89-trade rsi fixture moved
+  // net profit by $3,088 = $34.7 per trade against $15 per fill — 2.3 fills' worth, the excess being
+  // trades whose outcome changed once their fill prices moved. TradingView documents the opposite
+  // for limit orders, so this is an engine difference worth knowing; either way the analytical
+  // "both sides of every trade" assumption holds here, and claiming a fill-mix discrepancy would be
+  // a plausible explanation for a cause that is not real.
+  const slippageFills = full.trades.length * 2;
+
+  const stress = analyseCostStress({
+    points: stressPoints,
+    // The same denominator the metrics report uses, passed rather than recomputed so a different
+    // lots-versus-units reading cannot make the two disagree for a spurious reason.
+    twoSidedUnitValue:
+      2 *
+      full.trades.reduce((u, t) => u + Math.abs(t.qty) * symbolRow.contractSize, 0) *
+      symbolRow.pointValue,
+    analyticalPerSidePrice: full.metrics.costs.breakEvenPerSidePrice,
+    scale: { mintick: symbolRow.mintick, pipSize: symbolRow.pipSize },
+    slippageFills,
+    totalFills: full.trades.length * 2,
+  });
+
   /* --------------------------------------------------------- the checks */
 
   report(90, 'judging');
@@ -463,6 +558,7 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
     fillAuditResult(fills, symbolRow.mintick),
     asymmetryResult(asymmetry, feed),
     replayResult(replay),
+    costStressResult(stress),
     ...runChecks(BUILT_IN_CHECKS, {
       bars: full.engineResult.bars,
       timeframe,
@@ -514,6 +610,7 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
     sameBar,
     asymmetry,
     replay,
+    stress,
     elapsedMs: Date.now() - startedAt,
   };
 }
@@ -1119,6 +1216,57 @@ function replayResult(r: IntrabarReplayResult): CheckResult {
             .join('; ')
         : '') +
       `. ${r.explanation}`,
+    evidence,
+  };
+}
+
+/**
+ * Cost stress as a verdict.
+ *
+ * A warning, not a failure: a thin break-even is a property of the strategy, not a defect in the
+ * run. The one thing that would be a defect is the two break-even figures disagreeing for a reason
+ * nobody can name, so the detail always states both.
+ */
+function costStressResult(s: CostStressResult): CheckResult {
+  const base = {
+    id: 'execution-cost-stress',
+    label: 'Execution (cost stress)',
+    severity: 'warning' as const,
+  };
+
+  const evidence = {
+    breakEvenMultiplier:
+      s.breakEvenMultiplier === null ? 0 : Number(s.breakEvenMultiplier.toFixed(3)),
+    empiricalPerSidePips: Number(((s.perFill.pipsPerFill ?? 0) as number).toFixed(3)),
+    analyticalPerSidePrice: s.analyticalPerSidePrice ?? 0,
+    deltaPct: s.deltaPct === null ? 0 : Number(s.deltaPct.toFixed(2)),
+    tradeSetMoved: s.tradeSetMoved ? 1 : 0,
+    points: s.points.map((p) => `${String(p.multiplier)}x:${p.netProfit.toFixed(0)}`).join(' '),
+  };
+
+  if (s.breakEvenMultiplier === null) {
+    // Two very different things look alike here. Surviving every multiplier tested is a PASS — the
+    // strongest result this check can give. Losing money at zero cost is `n/a`, because there is no
+    // cost sensitivity to measure on a strategy that never had an edge to lose.
+    const survivedEverything = (s.points[0]?.netProfit ?? 0) > 0;
+    return survivedEverything
+      ? { ...base, status: 'pass', detail: s.explanation, evidence }
+      : { ...base, status: 'n/a', detail: s.explanation, inconclusiveReason: s.explanation };
+  }
+
+  // Surviving less than 1.5x its own costs means the edge is mostly an execution assumption.
+  const thin = s.breakEvenMultiplier < 1.5;
+
+  return {
+    ...base,
+    status: thin || s.agrees === false ? 'warn' : 'pass',
+    detail:
+      `${s.explanation} Empirical break-even ${((s.perFill.pipsPerFill ?? 0) as number).toFixed(2)} ` +
+      `pips per side; the metrics report says ` +
+      `${s.analyticalPerSidePrice === null ? 'n/a' : (s.analyticalPerSidePrice / 0.0001).toFixed(2)} pips.` +
+      (thin
+        ? ' Surviving under 1.5x its own costs makes this edge largely an execution assumption.'
+        : ''),
     evidence,
   };
 }
