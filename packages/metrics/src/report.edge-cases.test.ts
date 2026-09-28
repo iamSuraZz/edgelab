@@ -46,7 +46,7 @@ function baseInput(over: Partial<MetricsInput> = {}): MetricsInput {
     equityIntrabar: [],
     daily: [],
     monthly: [],
-    initialCapital: 10_000,
+    initialCapital: accountMoney(10_000),
     window: { fromMs: T0, toMs: T0 + 90 * DAY },
     instrument: INSTRUMENT,
     rfAnnual: 0,

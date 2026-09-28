@@ -116,7 +116,7 @@ const INPUT: MetricsInput = {
   equityIntrabar: tradeMarkedEquity(),
   daily: dailySamples(),
   monthly: monthlySamples(),
-  initialCapital: INITIAL,
+  initialCapital: accountMoney(INITIAL),
   window: { fromMs: FROM, toMs: TO },
   instrument: INSTRUMENT,
   rfAnnual: 0,

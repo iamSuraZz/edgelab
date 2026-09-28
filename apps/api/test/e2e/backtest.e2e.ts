@@ -8,6 +8,7 @@ import {
   type ApiError,
   type BacktestCreated,
   type JobEvent,
+  accountMoney,
 } from '@edgelab/shared';
 
 import { apiDelete, apiGet, apiPost, followJobEvents, startHarness, type Harness } from './helpers';
@@ -341,7 +342,7 @@ describe('the full backtest chain over HTTP', () => {
       timeframe: TIMEFRAME,
       fromMs: FROM,
       toMs: TO,
-      initialCapital: RUN_CONFIG.initialCapital,
+      initialCapital: accountMoney(RUN_CONFIG.initialCapital),
       accountCurrency: RUN_CONFIG.accountCurrency,
       costs: DEFAULT_COSTS,
       warmupBars: RUN_CONFIG.warmupBars,

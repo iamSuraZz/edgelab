@@ -26,6 +26,7 @@ import {
   type Verdict,
 } from '@edgelab/validation';
 import {
+  accountMoney,
   CostConfigSchema,
   DEFAULT_COSTS,
   timeframeMs,
@@ -176,7 +177,7 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
     timeframe,
     fromMs: run.fromMs,
     toMs: run.toMs,
-    initialCapital: run.initialCapital,
+    initialCapital: accountMoney(run.initialCapital),
     accountCurrency: run.accountCurrency,
     costs: costs.success ? costs.data : DEFAULT_COSTS,
     inputs: asRecord(run.inputs),
@@ -319,7 +320,7 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
     mintick: symbolRow.mintick,
     // qty on a costed trade is in LOTS, so the per-tick value must be per lot: one tick moved on
     // one lot. Passing a bare mintick here reported the penetration cost as 0.00.
-    valuePerTickPerQty: symbolRow.mintick * symbolRow.contractSize * symbolRow.pointValue,
+    valuePerTickPerLot: symbolRow.mintick * symbolRow.contractSize * symbolRow.pointValue,
   });
 
   /* --------------------------------------------------------- the checks */
@@ -337,12 +338,16 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
       timeframe,
       trades: full.trades,
       equity: full.equityClose,
-      initialCapital: run.initialCapital,
+      initialCapital: accountMoney(run.initialCapital),
     }),
   ];
 
   const sameBar = estimateSameBarBias({
+    // contractSize converts LOTS to UNITS. It was missing, and `pointValue` below is per UNIT, so
+    // every estimate came out 100,000x too small and the report read "-0.00" over 176 fills. The
+    // `Units` brand on MarketFill.qty is what finally surfaced it.
     fills: marketFillsFromTrades(
+      symbolRow.contractSize,
       full.trades.map((t, i) => ({
         seq: i + 1,
         side: t.side,

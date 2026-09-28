@@ -1,4 +1,4 @@
-import type { CostedTrade, EquityPoint, EquitySample } from '@edgelab/shared';
+import type { AccountMoney, CostedTrade, EquityPoint, EquitySample } from '@edgelab/shared';
 
 /**
  * The metrics engine is PURE: this input in, a MetricsReport out. No I/O, no clock.
@@ -35,13 +35,13 @@ export interface MetricsInput {
   readonly daily: readonly EquitySample[];
   /** Last equity of each UTC month. Drives the TradingView-style ratios. */
   readonly monthly: readonly EquitySample[];
-  readonly initialCapital: number;
+  readonly initialCapital: AccountMoney;
   readonly window: MetricsWindow;
   readonly instrument: MetricsInstrument;
   /** Annual risk-free rate as a fraction, e.g. 0.02. Default 0. */
   readonly rfAnnual?: number;
   /** Unrealised P&L of positions still open at the end, after costs. */
-  readonly openPnl?: number;
+  readonly openPnl?: AccountMoney;
   /** Return of buying and holding the instrument over the same window, in percent. */
   readonly buyAndHoldReturnPct?: number | null;
   /** Bars where a position was open, for exposure. */

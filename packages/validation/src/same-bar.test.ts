@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { lots, units } from '@edgelab/shared';
+
 import { estimateSameBarBias, marketFillsFromTrades, type MarketFill } from './same-bar';
 
 /**
@@ -21,7 +23,7 @@ describe('estimateSameBarBias', () => {
   it('charges a buy that filled ABOVE the same-bar price', () => {
     // Filled at bar 1's open of 102; a same-bar fill would have been bar 0's close of 101.
     const fills: MarketFill[] = [
-      { label: 't1 entry', fillBar: 1, fillPrice: 102, qty: 2, direction: 'buy' },
+      { label: 't1 entry', fillBar: 1, fillPrice: 102, qty: units(2), direction: 'buy' },
     ];
 
     const result = estimateSameBarBias({ fills, bars: BARS, pointValue: 1, rateAt: () => 1 });
@@ -36,7 +38,7 @@ describe('estimateSameBarBias', () => {
   it('CREDITS a buy that filled BELOW the same-bar price', () => {
     // Bar 2 opens at 102 after bar 1 closed at 103 — the gap went our way.
     const fills: MarketFill[] = [
-      { label: 't1 entry', fillBar: 2, fillPrice: 102, qty: 1, direction: 'buy' },
+      { label: 't1 entry', fillBar: 2, fillPrice: 102, qty: units(1), direction: 'buy' },
     ];
 
     const result = estimateSameBarBias({ fills, bars: BARS, pointValue: 1, rateAt: () => 1 });
@@ -48,13 +50,13 @@ describe('estimateSameBarBias', () => {
   it('mirrors the sign for a sell', () => {
     // Selling at 102 when a same-bar fill would have got 101 is BETTER for us.
     const sell = estimateSameBarBias({
-      fills: [{ label: 't1 exit', fillBar: 1, fillPrice: 102, qty: 1, direction: 'sell' }],
+      fills: [{ label: 't1 exit', fillBar: 1, fillPrice: 102, qty: units(1), direction: 'sell' }],
       bars: BARS,
       pointValue: 1,
       rateAt: () => 1,
     });
     const buy = estimateSameBarBias({
-      fills: [{ label: 't1 entry', fillBar: 1, fillPrice: 102, qty: 1, direction: 'buy' }],
+      fills: [{ label: 't1 entry', fillBar: 1, fillPrice: 102, qty: units(1), direction: 'buy' }],
       bars: BARS,
       pointValue: 1,
       rateAt: () => 1,
@@ -65,7 +67,7 @@ describe('estimateSameBarBias', () => {
 
   it('reports zero when there is no gap at all', () => {
     const result = estimateSameBarBias({
-      fills: [{ label: 't1 entry', fillBar: 3, fillPrice: 104, qty: 5, direction: 'buy' }],
+      fills: [{ label: 't1 entry', fillBar: 3, fillPrice: 104, qty: units(5), direction: 'buy' }],
       bars: BARS,
       pointValue: 1,
       rateAt: () => 1,
@@ -78,7 +80,7 @@ describe('estimateSameBarBias', () => {
   it('scales by contract value and the account rate', () => {
     // 1.0 of price x 2 contracts x 100,000 point value / 150 (yen per dollar) = 1333.33...
     const result = estimateSameBarBias({
-      fills: [{ label: 't1 entry', fillBar: 1, fillPrice: 102, qty: 2, direction: 'buy' }],
+      fills: [{ label: 't1 entry', fillBar: 1, fillPrice: 102, qty: units(2), direction: 'buy' }],
       bars: BARS,
       pointValue: 100_000,
       rateAt: () => 1 / 150,
@@ -91,7 +93,7 @@ describe('estimateSameBarBias', () => {
     // There is no preceding bar, so there is no same-bar price. Scoring it zero would dilute the
     // mean and quietly understate the bias.
     const result = estimateSameBarBias({
-      fills: [{ label: 't1 entry', fillBar: 0, fillPrice: 100, qty: 1, direction: 'buy' }],
+      fills: [{ label: 't1 entry', fillBar: 0, fillPrice: 100, qty: units(1), direction: 'buy' }],
       bars: BARS,
       pointValue: 1,
       rateAt: () => 1,
@@ -106,9 +108,9 @@ describe('estimateSameBarBias', () => {
   it('averages over assessed fills only', () => {
     const result = estimateSameBarBias({
       fills: [
-        { label: 'a', fillBar: 1, fillPrice: 102, qty: 1, direction: 'buy' }, // +1
-        { label: 'b', fillBar: 3, fillPrice: 104, qty: 1, direction: 'buy' }, //  0
-        { label: 'c', fillBar: 0, fillPrice: 100, qty: 1, direction: 'buy' }, // skipped
+        { label: 'a', fillBar: 1, fillPrice: 102, qty: units(1), direction: 'buy' }, // +1
+        { label: 'b', fillBar: 3, fillPrice: 104, qty: units(1), direction: 'buy' }, //  0
+        { label: 'c', fillBar: 0, fillPrice: 100, qty: units(1), direction: 'buy' }, // skipped
       ],
       bars: BARS,
       pointValue: 1,
@@ -134,7 +136,7 @@ describe('marketFillsFromTrades', () => {
     {
       seq: 1,
       side: 'long' as const,
-      qty: 1,
+      qty: lots(1),
       entryBar: 5,
       entryPrice: 10,
       exitBar: 9,
@@ -143,7 +145,7 @@ describe('marketFillsFromTrades', () => {
     {
       seq: 2,
       side: 'short' as const,
-      qty: 2,
+      qty: lots(2),
       entryBar: 9,
       entryPrice: 11,
       exitBar: 12,
@@ -152,7 +154,7 @@ describe('marketFillsFromTrades', () => {
   ];
 
   it('opens a long with a buy and closes it with a sell', () => {
-    const fills = marketFillsFromTrades(TRADES);
+    const fills = marketFillsFromTrades(1, TRADES);
 
     expect(fills.map((f) => `${f.label}:${f.direction}`)).toEqual([
       't1 entry:buy',
@@ -163,7 +165,7 @@ describe('marketFillsFromTrades', () => {
   });
 
   it('carries the bar, price and size of each leg', () => {
-    const fills = marketFillsFromTrades(TRADES);
+    const fills = marketFillsFromTrades(1, TRADES);
 
     expect(fills[1]).toEqual({
       label: 't1 exit',
@@ -176,8 +178,50 @@ describe('marketFillsFromTrades', () => {
 
   it('lets the caller exclude legs that were not market fills', () => {
     // A stop or limit exit fills at its own level, not the next open, so it is not comparable.
-    const fills = marketFillsFromTrades(TRADES, (_seq, leg) => leg === 'entry');
+    const fills = marketFillsFromTrades(1, TRADES, (_seq, leg) => leg === 'entry');
 
     expect(fills.map((f) => f.label)).toEqual(['t1 entry', 't2 entry']);
+  });
+});
+
+describe('marketFillsFromTrades — lots to units', () => {
+  /**
+   * The regression that motivated the brands. A trade's `qty` is in LOTS; a fill's is in UNITS,
+   * because `pointValue` is per unit. The conversion was absent for two sessions, so every
+   * same-bar estimate came out by a factor of contractSize and the report read "-0.00".
+   */
+  it('scales a trade qty by the contract size', () => {
+    const fills = marketFillsFromTrades(100_000, [
+      {
+        seq: 1,
+        side: 'long' as const,
+        qty: lots(2),
+        entryBar: 5,
+        entryPrice: 10,
+        exitBar: 9,
+        exitPrice: 11,
+      },
+    ]);
+
+    expect(fills.map((f) => f.qty)).toEqual([200_000, 200_000]);
+  });
+
+  it('prices a fill in account money, not 1/contractSize of it', () => {
+    const fills = marketFillsFromTrades(100_000, [
+      {
+        seq: 1,
+        side: 'long' as const,
+        qty: lots(1),
+        entryBar: 1,
+        entryPrice: 102,
+        exitBar: 3,
+        exitPrice: 104,
+      },
+    ]);
+
+    // Entry gapped 1.0 above bar 0's close on one lot of 100,000 at pointValue 1 = 100,000.
+    const result = estimateSameBarBias({ fills, bars: BARS, pointValue: 1, rateAt: () => 1 });
+
+    expect(result.rows[0]!.accountCost).toBe(100_000);
   });
 });

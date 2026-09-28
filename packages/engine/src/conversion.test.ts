@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getSeedSymbol, type Bar } from '@edgelab/shared';
+import { getSeedSymbol, type Bar, accountMoney } from '@edgelab/shared';
 
 import {
   MissingConversionPairError,
@@ -151,11 +151,11 @@ describe('the USDJPY hand check — two trades', () => {
 
   it('restates the starting capital into the quote currency at the first bar', () => {
     // USD 10,000 at 1/150 USD per JPY is 1,500,000 JPY.
-    expect(initialCapitalInQuote(10_000, rateAt(T0))).toBeCloseTo(1_500_000, 6);
+    expect(initialCapitalInQuote(accountMoney(10_000), rateAt(T0))).toBeCloseTo(1_500_000, 6);
   });
 
   it('rejects a non-positive rate rather than producing an infinity', () => {
-    expect(() => initialCapitalInQuote(10_000, 0)).toThrow(RangeError);
+    expect(() => initialCapitalInQuote(accountMoney(10_000), 0)).toThrow(RangeError);
   });
 });
 

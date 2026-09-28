@@ -1,4 +1,4 @@
-import { lots, lotsToUnits, units } from '@edgelab/shared';
+import { accountMoney, lots, lotsToUnits, units, type AccountMoney } from '@edgelab/shared';
 import type {
   Bar,
   ClosedTrade,
@@ -55,7 +55,7 @@ export interface ReconstructedEquity {
   /** Realized P&L summed over all closed trades, after costs. */
   readonly realizedPnl: number;
   /** Unrealised P&L of still-open positions at the final bar's close. */
-  readonly openPnl: number;
+  readonly openPnl: AccountMoney;
   /** Bars on which any position was open, for exposure. */
   readonly barsInMarket: number;
   readonly finalEquity: number;
@@ -174,7 +174,7 @@ export function reconstructEquity(params: ReconstructParams): ReconstructedEquit
     daily: sampleBy(close, utcDayStart),
     monthly: sampleBy(close, utcMonthStart),
     realizedPnl: realized,
-    openPnl: lastOpenPnl,
+    openPnl: accountMoney(lastOpenPnl),
     barsInMarket,
     finalEquity: close[close.length - 1]?.equity ?? initialCapital,
   };

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_COSTS, ZERO_COSTS, getSeedSymbol, type Bar } from '@edgelab/shared';
+import { DEFAULT_COSTS, ZERO_COSTS, getSeedSymbol, type Bar, accountMoney } from '@edgelab/shared';
 
 import { CurrencyMismatchError } from './costs';
 import { STRATEGY_FIXTURES } from './fixtures';
@@ -52,7 +52,7 @@ const base = {
   timeframe: 'M15' as const,
   fromMs: FROM,
   toMs: TO,
-  initialCapital: 10_000,
+  initialCapital: accountMoney(10_000),
   accountCurrency: 'USD',
   // 1 lot at 1:100 leverage, so orders are affordable and actually fill.
   overrides: {

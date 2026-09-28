@@ -889,3 +889,29 @@ Spec 06 §3 includes a sealed holdout — reserve the most recent X% of data, ex
 runs, unseal once and record that it was viewed, and report "holdout viewed N times". It had dropped
 off the remaining-work list. It now sits after walk-forward, which is the right order: the holdout is
 the last thing a strategy should touch, and walk-forward is what it is being protected from.
+
+## A18 · Brands reach the checks that got it wrong
+
+A15 branded `CostedTrade`, the cost overlay, equity and the DB boundary. It stopped one layer short
+of the validation checks — which is where both lots-vs-units bugs actually happened. They now take
+branded inputs: `AuditTrade` carries `Lots`/`Price`/`AccountMoney`, and `MarketFill.qty` is `Units`
+because the `pointValue` beside it is per unit.
+
+That found a third instance of the same bug, still live. `marketFillsFromTrades` took a trade's
+`qty` — LOTS — and handed it to an estimate that multiplies by a per-UNIT `pointValue`, so every
+same-bar figure was out by the contract size and the report read "-0.00" over 176 fills. The
+function now takes `contractSize` and converts. Two regression tests pin it: a 2-lot trade yields
+200,000 units, and a one-lot gap of 1.0 prices at 100,000 rather than 1.
+
+`valuePerTickPerQty` is renamed `valuePerTickPerLot`, because "per qty" is precisely the ambiguity
+that caused this.
+
+Metrics came almost free: `MetricsInput.trades` was already `CostedTrade[]`, so only `initialCapital`
+and `openPnl` needed brands. Following them outward took the brand to the real mint sites — the CLI's
+`--capital` argument, the worker pool task, and the validation runner — which is where a plain number
+should become money and nowhere else. `initialCapitalInQuote` now takes `AccountMoney` and returns
+`QuoteMoney` through the named `accountToQuoteMoney`, so bug #1's account-vs-quote confusion has a
+type boundary rather than a comment.
+
+Metric OUTPUTS are still plain numbers. That surface is large and every field is account money, so
+it buys much less than the input side did; not done, and deliberately.

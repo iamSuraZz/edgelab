@@ -8,7 +8,7 @@ import {
   type OrchestratedRun,
 } from '@edgelab/engine';
 import type { CostConfig, SymbolSpec, Timeframe } from '@edgelab/shared';
-import { timeframeMs } from '@edgelab/shared';
+import { timeframeMs, accountMoney } from '@edgelab/shared';
 
 /**
  * The backtest, executed inside a piscina worker thread.
@@ -202,7 +202,7 @@ export default async function backtestTask(input: BacktestTaskInput): Promise<Ba
     timeframe: input.timeframe,
     fromMs: input.fromMs,
     toMs: input.toMs,
-    initialCapital: input.initialCapital,
+    initialCapital: accountMoney(input.initialCapital),
     accountCurrency: input.accountCurrency,
     costs: input.costs,
     inputs: input.inputs,

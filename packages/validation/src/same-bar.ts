@@ -1,3 +1,5 @@
+import { lotsToUnits, type Lots, type Units } from '@edgelab/shared';
+
 /**
  * Same-bar execution bias, estimated analytically rather than re-run.
  *
@@ -32,8 +34,14 @@ export interface MarketFill {
   readonly fillBar: number;
   /** The price we actually filled at. Usually `bars[fillBar].open`. */
   readonly fillPrice: number;
-  /** Position size in the same units the engine used. */
-  readonly qty: number;
+  /**
+   * Position size in UNITS (contracts), because `pointValue` below is per unit.
+   *
+   * Branded after this was wrong in production: the caller passed a CostedTrade's `qty`, which is
+   * in LOTS, so every estimate came out 100,000x too small and the report read "-0.00". A `Lots`
+   * value no longer compiles here.
+   */
+  readonly qty: Units;
   /**
    * Which way the fill went.
    *
@@ -131,15 +139,19 @@ export function estimateSameBarBias(params: SameBarBiasParams): SameBarBiasEstim
 /**
  * Derive the market fills of a run from its closed trades.
  *
+ * Takes `contractSize` because a trade's `qty` is in LOTS and a fill's is in UNITS. That conversion
+ * used to be absent, which is what made every estimate 100,000x too small.
+ *
  * Both legs of every trade, because both are market fills under the fixtures we ship. A strategy
  * using limit or stop orders fills at its own level rather than the next open, so those legs are
  * not comparable this way — the caller passes `isMarketFill` to exclude them.
  */
 export function marketFillsFromTrades(
+  contractSize: number,
   trades: readonly {
     readonly seq: number;
     readonly side: 'long' | 'short';
-    readonly qty: number;
+    readonly qty: Lots;
     readonly entryBar: number;
     readonly entryPrice: number;
     readonly exitBar: number;
@@ -157,7 +169,7 @@ export function marketFillsFromTrades(
         label: `t${String(t.seq)} entry`,
         fillBar: t.entryBar,
         fillPrice: t.entryPrice,
-        qty: t.qty,
+        qty: lotsToUnits(t.qty, contractSize),
         direction: entryDirection,
       });
     }
@@ -166,7 +178,7 @@ export function marketFillsFromTrades(
         label: `t${String(t.seq)} exit`,
         fillBar: t.exitBar,
         fillPrice: t.exitPrice,
-        qty: t.qty,
+        qty: lotsToUnits(t.qty, contractSize),
         // Closing reverses the direction: a long is sold to close.
         direction: entryDirection === 'buy' ? 'sell' : 'buy',
       });

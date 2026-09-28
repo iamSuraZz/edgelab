@@ -6,6 +6,7 @@ import type {
   EquityPoint,
   EquitySample,
   SymbolSpec,
+  AccountMoney,
 } from '@edgelab/shared';
 import { ZERO_COSTS } from '@edgelab/shared';
 
@@ -42,7 +43,7 @@ export interface OrchestrateParams {
   readonly timeframe: RunParams['timeframe'];
   readonly fromMs: number;
   readonly toMs: number;
-  readonly initialCapital: number;
+  readonly initialCapital: AccountMoney;
   readonly accountCurrency: string;
   readonly costs: CostConfig;
   readonly inputs?: Readonly<Record<string, unknown>>;

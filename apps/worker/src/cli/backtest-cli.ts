@@ -29,6 +29,7 @@ import {
   type CostConfig,
   type SymbolSpec,
   type Timeframe,
+  accountMoney,
 } from '@edgelab/shared';
 import { VALIDATION_FIXTURES } from '@edgelab/validation';
 
@@ -334,7 +335,8 @@ async function runOne(params: RunOneParams): Promise<boolean> {
       timeframe: args.timeframe,
       fromMs: args.fromMs,
       toMs: args.toMs,
-      initialCapital: args.initialCapital,
+      // The mint site: a number off the command line becomes account-currency money here.
+      initialCapital: accountMoney(args.initialCapital),
       accountCurrency: args.accountCurrency,
       costs: args.costs,
       warmupBars: args.warmupBars,

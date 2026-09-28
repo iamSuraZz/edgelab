@@ -1,4 +1,10 @@
-import type { Bar, SymbolSpec } from '@edgelab/shared';
+import {
+  accountToQuoteMoney,
+  type AccountMoney,
+  type Bar,
+  type QuoteMoney,
+  type SymbolSpec,
+} from '@edgelab/shared';
 
 /**
  * The currency layer (spec 03).
@@ -186,11 +192,14 @@ export function conversionWindow(fromMs: number, toMs: number): { fromMs: number
  * the first bar's rate. Reporting then converts back bar by bar — which is not a round trip,
  * because the rate moves, and that movement is a real component of the account-currency result.
  */
-export function initialCapitalInQuote(accountCapital: number, rateAtFirstBar: number): number {
+export function initialCapitalInQuote(
+  accountCapital: AccountMoney,
+  rateAtFirstBar: number,
+): QuoteMoney {
   if (!Number.isFinite(rateAtFirstBar) || rateAtFirstBar <= 0) {
     throw new RangeError(`Conversion rate must be positive, received ${String(rateAtFirstBar)}`);
   }
-  return accountCapital / rateAtFirstBar;
+  return accountToQuoteMoney(accountCapital, rateAtFirstBar);
 }
 
 /**

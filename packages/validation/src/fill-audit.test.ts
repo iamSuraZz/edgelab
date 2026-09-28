@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { accountMoney, lots, price } from '@edgelab/shared';
+
 import { auditFills, type AuditBar, type AuditTrade } from './fill-audit';
 
 /**
@@ -22,12 +24,12 @@ function trade(over: Partial<AuditTrade> = {}): AuditTrade {
   return {
     seq: 1,
     side: 'long',
-    qty: 1,
+    qty: lots(1),
     entryBar: 1,
-    entryPrice: 1.1,
+    entryPrice: price(1.1),
     exitBar: 2,
-    exitPrice: 1.11,
-    netPnl: 100,
+    exitPrice: price(1.11),
+    netPnl: accountMoney(100),
     ...over,
   };
 }
@@ -45,7 +47,7 @@ describe('auditFills — range', () => {
       trades: [trade()],
       bars: BARS,
       mintick: MINTICK,
-      valuePerTickPerQty: TICK_VALUE,
+      valuePerTickPerLot: TICK_VALUE,
     });
 
     expect(r.outOfRange).toEqual([]);
@@ -54,10 +56,10 @@ describe('auditFills — range', () => {
 
   it('flags a fill below the bar low, with how far outside', () => {
     const r = auditFills({
-      trades: [trade({ entryPrice: 1.098 })],
+      trades: [trade({ entryPrice: price(1.098) })],
       bars: BARS,
       mintick: MINTICK,
-      valuePerTickPerQty: TICK_VALUE,
+      valuePerTickPerLot: TICK_VALUE,
     });
 
     expect(r.outOfRange).toHaveLength(1);
@@ -67,10 +69,10 @@ describe('auditFills — range', () => {
 
   it('flags a fill above the bar high', () => {
     const r = auditFills({
-      trades: [trade({ exitPrice: 1.2 })],
+      trades: [trade({ exitPrice: price(1.2) })],
       bars: BARS,
       mintick: MINTICK,
-      valuePerTickPerQty: TICK_VALUE,
+      valuePerTickPerLot: TICK_VALUE,
     });
 
     expect(r.outOfRange).toHaveLength(1);
@@ -81,10 +83,10 @@ describe('auditFills — range', () => {
     // Prices pass through resampling and a transpiler; bit-exact comparison would report noise as
     // an engine defect and the check would be ignored within a day.
     const r = auditFills({
-      trades: [trade({ entryPrice: 1.099 - MINTICK / 4 })],
+      trades: [trade({ entryPrice: price(1.099 - MINTICK / 4) })],
       bars: BARS,
       mintick: MINTICK,
-      valuePerTickPerQty: TICK_VALUE,
+      valuePerTickPerLot: TICK_VALUE,
     });
 
     expect(r.outOfRange).toEqual([]);
@@ -95,7 +97,7 @@ describe('auditFills — range', () => {
       trades: [trade({ entryBar: 99, exitBar: 2 })],
       bars: BARS,
       mintick: MINTICK,
-      valuePerTickPerQty: TICK_VALUE,
+      valuePerTickPerLot: TICK_VALUE,
     });
 
     expect(r.fillsUnlocatable).toBe(1);
@@ -107,10 +109,10 @@ describe('auditFills — market fills at the open', () => {
   it('counts a fill at the bar open', () => {
     // Our engine fills market orders at the next bar's open, so this is the expected shape.
     const r = auditFills({
-      trades: [trade({ entryPrice: 1.1, exitPrice: 1.11 })],
+      trades: [trade({ entryPrice: price(1.1), exitPrice: price(1.11) })],
       bars: BARS,
       mintick: MINTICK,
-      valuePerTickPerQty: TICK_VALUE,
+      valuePerTickPerLot: TICK_VALUE,
     });
 
     expect(r.atOpen).toBe(2);
@@ -118,10 +120,10 @@ describe('auditFills — market fills at the open', () => {
 
   it('does not count a mid-bar fill as an open fill', () => {
     const r = auditFills({
-      trades: [trade({ entryPrice: 1.1004, exitPrice: 1.1104 })],
+      trades: [trade({ entryPrice: price(1.1004), exitPrice: price(1.1104) })],
       bars: BARS,
       mintick: MINTICK,
-      valuePerTickPerQty: TICK_VALUE,
+      valuePerTickPerLot: TICK_VALUE,
     });
 
     expect(r.atOpen).toBe(0);
@@ -134,10 +136,10 @@ describe('auditFills — market fills at the open', () => {
 describe('auditFills — touch fills', () => {
   it('flags a fill exactly on the bar high', () => {
     const r = auditFills({
-      trades: [trade({ exitPrice: 1.111 })],
+      trades: [trade({ exitPrice: price(1.111) })],
       bars: BARS,
       mintick: MINTICK,
-      valuePerTickPerQty: TICK_VALUE,
+      valuePerTickPerLot: TICK_VALUE,
     });
 
     expect(r.touches).toHaveLength(1);
@@ -147,10 +149,10 @@ describe('auditFills — touch fills', () => {
 
   it('flags a fill exactly on the bar low', () => {
     const r = auditFills({
-      trades: [trade({ entryPrice: 1.099 })],
+      trades: [trade({ entryPrice: price(1.099) })],
       bars: BARS,
       mintick: MINTICK,
-      valuePerTickPerQty: TICK_VALUE,
+      valuePerTickPerLot: TICK_VALUE,
     });
 
     expect(r.touches).toHaveLength(1);
@@ -162,10 +164,10 @@ describe('auditFills — touch fills', () => {
     // inflate the touch figure on every gap bar.
     const gapBar = bar(1.1, 1.1, 1.095, 1.096); // open === high
     const r = auditFills({
-      trades: [trade({ entryBar: 0, entryPrice: 1.1, exitBar: 0, exitPrice: 1.1 })],
+      trades: [trade({ entryBar: 0, entryPrice: price(1.1), exitBar: 0, exitPrice: price(1.1) })],
       bars: [gapBar],
       mintick: MINTICK,
-      valuePerTickPerQty: TICK_VALUE,
+      valuePerTickPerLot: TICK_VALUE,
     });
 
     expect(r.touches).toEqual([]);
@@ -176,10 +178,10 @@ describe('auditFills — touch fills', () => {
     // The question being answered: how much of this result rests on fills that may never have
     // happened. Always adverse, so the adjusted figure is never flattering.
     const r = auditFills({
-      trades: [trade({ qty: 2, exitPrice: 1.111, netPnl: 500 })],
+      trades: [trade({ qty: lots(2), exitPrice: price(1.111), netPnl: accountMoney(500) })],
       bars: BARS,
       mintick: MINTICK,
-      valuePerTickPerQty: TICK_VALUE,
+      valuePerTickPerLot: TICK_VALUE,
     });
 
     expect(r.netPnlReported).toBe(500);
@@ -190,10 +192,12 @@ describe('auditFills — touch fills', () => {
 
   it('leaves P&L untouched when there are no touch fills', () => {
     const r = auditFills({
-      trades: [trade({ entryPrice: 1.1004, exitPrice: 1.1104, netPnl: 250 })],
+      trades: [
+        trade({ entryPrice: price(1.1004), exitPrice: price(1.1104), netPnl: accountMoney(250) }),
+      ],
       bars: BARS,
       mintick: MINTICK,
-      valuePerTickPerQty: TICK_VALUE,
+      valuePerTickPerLot: TICK_VALUE,
     });
 
     expect(r.netPnlIfPenetrationRequired).toBe(250);
@@ -201,10 +205,17 @@ describe('auditFills — touch fills', () => {
 
   it('scales the adjustment by quantity and counts both legs', () => {
     const r = auditFills({
-      trades: [trade({ qty: 3, entryPrice: 1.099, exitPrice: 1.111, netPnl: 0 })],
+      trades: [
+        trade({
+          qty: lots(3),
+          entryPrice: price(1.099),
+          exitPrice: price(1.111),
+          netPnl: accountMoney(0),
+        }),
+      ],
       bars: BARS,
       mintick: MINTICK,
-      valuePerTickPerQty: TICK_VALUE,
+      valuePerTickPerLot: TICK_VALUE,
     });
 
     expect(r.touches).toHaveLength(2);
@@ -218,7 +229,7 @@ describe('auditFills — empty input', () => {
       trades: [],
       bars: BARS,
       mintick: MINTICK,
-      valuePerTickPerQty: TICK_VALUE,
+      valuePerTickPerLot: TICK_VALUE,
     });
 
     expect(r.fillsChecked).toBe(0);

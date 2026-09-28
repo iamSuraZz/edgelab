@@ -1,3 +1,5 @@
+import { accountMoney, type AccountMoney, type Lots, type Price } from '@edgelab/shared';
+
 /**
  * Fill audit — do the fills the engine reported actually correspond to the bars they happened on?
  *
@@ -24,12 +26,12 @@
 export interface AuditTrade {
   readonly seq: number;
   readonly side: 'long' | 'short';
-  readonly qty: number;
+  readonly qty: Lots;
   readonly entryBar: number;
-  readonly entryPrice: number;
+  readonly entryPrice: Price;
   readonly exitBar: number;
-  readonly exitPrice: number;
-  readonly netPnl: number;
+  readonly exitPrice: Price;
+  readonly netPnl: AccountMoney;
 }
 
 export interface AuditBar {
@@ -74,8 +76,8 @@ export interface FillAuditResult {
    * Computed by moving each touch fill one tick ADVERSE — the conservative reading, and the one
    * that answers "how much of this result depends on fills that might not have happened".
    */
-  readonly netPnlIfPenetrationRequired: number;
-  readonly netPnlReported: number;
+  readonly netPnlIfPenetrationRequired: AccountMoney;
+  readonly netPnlReported: AccountMoney;
 }
 
 export interface AuditFillsParams {
@@ -90,9 +92,10 @@ export interface AuditFillsParams {
    * gives 0.00001 × 1 — a number that rounds to nothing and makes the penetration figure look like
    * a rounding error instead of a dollar per fill. For a 5-digit FX pair at 100,000 per lot that is
    * `mintick × contractSize × pointValue` = 1.00. Getting this wrong once already produced a report
-   * reading "would move net P&L by 0.00".
+   * reading "would move net P&L by 0.00", and the same confusion was still live in the same-bar
+   * estimate a session later — which is why `qty` above is branded now rather than commented.
    */
-  readonly valuePerTickPerQty: number;
+  readonly valuePerTickPerLot: number;
   /**
    * Price tolerance for the range test.
    *
@@ -178,7 +181,7 @@ export function auditFills(params: AuditFillsParams): FillAuditResult {
          * lower costs the same. Both reduce P&L, which is why the adjustment is always negative —
          * the question being answered is how much worse the result could legitimately have been.
          */
-        penetrationAdjustment -= params.valuePerTickPerQty * trade.qty;
+        penetrationAdjustment -= params.valuePerTickPerLot * trade.qty;
       }
     }
   }
@@ -189,7 +192,7 @@ export function auditFills(params: AuditFillsParams): FillAuditResult {
     outOfRange,
     atOpen,
     touches,
-    netPnlReported,
-    netPnlIfPenetrationRequired: netPnlReported + penetrationAdjustment,
+    netPnlReported: accountMoney(netPnlReported),
+    netPnlIfPenetrationRequired: accountMoney(netPnlReported + penetrationAdjustment),
   };
 }
