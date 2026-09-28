@@ -173,3 +173,26 @@ plot(close)
     expect(compatibilityDiagnostics(src)).toEqual([]);
   });
 });
+
+describe('divergent strategy props', () => {
+  it('warns that slippage also slips LIMIT fills, unlike TradingView', () => {
+    const d = compatibilityDiagnostics('//@version=5\nstrategy("S", slippage=15)\n');
+    const found = d.find((x) => x.code === 'divergent-strategy-prop');
+
+    expect(found).toBeDefined();
+    expect(found!.message).toContain('LIMIT');
+    expect(found!.message).toContain('honoured');
+  });
+
+  it('does not call it ignored, because it is applied', () => {
+    const d = compatibilityDiagnostics('//@version=5\nstrategy("S", slippage=15)\n');
+    expect(
+      d.some((x) => x.code === 'ignored-strategy-prop' && x.message.includes('slippage')),
+    ).toBe(false);
+  });
+
+  it('stays quiet for slippage=0, which asks for nothing', () => {
+    const d = compatibilityDiagnostics('//@version=5\nstrategy("S", slippage=0)\n');
+    expect(d.some((x) => x.code === 'divergent-strategy-prop')).toBe(false);
+  });
+});

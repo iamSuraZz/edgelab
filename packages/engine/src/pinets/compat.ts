@@ -19,6 +19,25 @@ import type { Diagnostic } from '../pine-engine';
  * unconditional — `if (order.bar >= ctx.idx) continue` then `fillPrice = open[0]` — so a
  * market order always fills at the NEXT bar's open, whatever these are set to.
  */
+/**
+ * Props PineTS DOES honour, but differently from TradingView.
+ *
+ * Kept apart from `IGNORED_STRATEGY_PROPS` because the two need opposite advice: an ignored prop
+ * means the behaviour you asked for is absent, a divergent one means it is present and wrong in a
+ * specific, stateable way. Telling a user that `slippage` is "ignored" when it is charging them on
+ * every fill would be worse than saying nothing.
+ */
+export const DIVERGENT_STRATEGY_PROPS: ReadonlyMap<string, string> = new Map([
+  [
+    'slippage',
+    'PineTS applies slippage to LIMIT fills as well as market and stop fills. TradingView never ' +
+      'slips a limit order — it fills at its price or better by definition — so a bracket ' +
+      'strategy is charged slippage here on both legs where TradingView would charge it on one. ' +
+      'Measured per fill: with slippage=15, market, stop AND limit fills all moved exactly 15 ' +
+      'ticks adversely.',
+  ],
+]);
+
 export const IGNORED_STRATEGY_PROPS: ReadonlyMap<string, string> = new Map([
   [
     'process_orders_on_close',
@@ -268,6 +287,22 @@ export function compatibilityDiagnostics(source: string): Diagnostic[] {
   }
 
   for (const arg of declaredArguments(stripped)) {
+    const divergence = DIVERGENT_STRATEGY_PROPS.get(arg.name);
+    if (divergence !== undefined) {
+      const writtenValue = normaliseLiteral(source.slice(arg.valueSpanStart, arg.valueSpanEnd));
+      // Declaring slippage=0 asks for nothing, so there is nothing to diverge on.
+      if (writtenValue !== '0') {
+        diagnostics.push({
+          line: arg.line,
+          col: null,
+          message: `${arg.name} is honoured by PineTS ${'0.9.34'} but DIFFERS from TradingView. ${divergence}`,
+          severity: 'warning',
+          code: 'divergent-strategy-prop',
+        });
+      }
+      continue;
+    }
+
     const explanation = IGNORED_STRATEGY_PROPS.get(arg.name);
     if (explanation === undefined) continue;
     // Read the value from the ORIGINAL source: stripping blanks string contents, so

@@ -11,6 +11,7 @@ import type {
 } from '@edgelab/shared';
 
 import type { EngineTrade } from './pine-engine';
+import { slippageForTrade, type FillSlippage } from './slippage';
 
 /**
  * The broker cost overlay (spec 04, amended by D5 and D6). Pure.
@@ -236,6 +237,14 @@ export interface ApplyCostsParams {
    * different basis were ingested. Passing it explicitly is what makes a mid feed cost correctly.
    */
   readonly basis?: PriceBasis;
+  /**
+   * Per-fill slippage, measured against each fill's unslipped reference.
+   *
+   * Omit it and the old nominal formula is used, which assumes both fills of every trade slip by
+   * the configured amount. Supplying it makes the waterfall's slippage line equal to what was
+   * actually charged.
+   */
+  readonly measuredSlippage?: readonly FillSlippage[];
 }
 
 /**
@@ -254,7 +263,7 @@ export interface ApplyCostsParams {
  * the true gross and then subtracted again in the waterfall. They are not charged twice.
  */
 export function applyCosts(params: ApplyCostsParams): CostedTrade[] {
-  const { trades, bars, symbol, config, quoteToAccount, basis = 'bid' } = params;
+  const { trades, bars, symbol, config, quoteToAccount, basis = 'bid', measuredSlippage } = params;
 
   const barByIndex = (index: number | null): Bar | undefined =>
     index === null || index < 0 ? undefined : bars[index];
@@ -306,12 +315,17 @@ export function applyCosts(params: ApplyCostsParams): CostedTrade[] {
     // round trip settled.
     const commission = trade.commission * quoteToAccount(exitTime);
 
-    // Slippage is an ESTIMATE for attribution only — the engine already moved the fill price,
-    // so this figure explains where part of enginePnl went rather than charging anything new.
-    // Both fills slip, hence the factor of 2.
+    // Slippage is attribution only — the engine already moved the fill price, so this explains
+    // where part of enginePnl went rather than charging anything new. MEASURED per fill when the
+    // caller supplies the measurement, because the old form was `2 x slippagePoints x mintick`, an
+    // assumption that both fills slip stated as a comment and never checked. A nominal figure here
+    // means the costs SHOWN can differ from the costs TAKEN.
+    const slippagePrice =
+      measuredSlippage === undefined
+        ? 2 * config.slippagePoints * symbol.mintick
+        : slippageForTrade(measuredSlippage, i + 1);
     const slippageCost =
-      priceDeltaToQuote(2 * config.slippagePoints * symbol.mintick, positionUnits, symbol) *
-      quoteToAccount(exitTime);
+      priceDeltaToQuote(slippagePrice, positionUnits, symbol) * quoteToAccount(exitTime);
 
     const enginePnl = (trade.netPnl ?? 0) * quoteToAccount(exitTime);
     const netPnl = enginePnl - spreadCost - financingCost;

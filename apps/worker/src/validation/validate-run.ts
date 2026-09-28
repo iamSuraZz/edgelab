@@ -12,7 +12,6 @@ import {
   describePerFill,
   type CostStressResult,
   type StressPoint,
-  ExitLevelIndex,
   replayIntrabar,
   type IntrabarReplayResult,
   levelExitIdsFromSource,
@@ -38,6 +37,7 @@ import {
 import {
   accountMoney,
   describeBasis,
+  ExitLevelIndex,
   priceBasisForSource,
   CostConfigSchema,
   DEFAULT_COSTS,

@@ -1,6 +1,12 @@
-import { deriveQuotes, type Bar, type Lots, type Price, type PriceBasis } from '@edgelab/shared';
+import {
+  deriveQuotes,
+  type Bar,
+  type Lots,
+  type Price,
+  type PriceBasis,
+  type ResolvedLevels,
+} from '@edgelab/shared';
 
-import { type ResolvedLevels } from './exit-levels';
 import { perFillFigures, type InstrumentScale, type PerFillFigures } from './per-fill';
 
 /**

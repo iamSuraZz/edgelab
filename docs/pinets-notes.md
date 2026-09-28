@@ -367,6 +367,32 @@ overrun — use it as a runaway-script guard.
 This section drives the editor's **Compatibility panel**. Build the table from
 `https://docs.luxalgo.com/llms-full.txt` at build time, applying these corrections.
 
+### `slippage` is honoured, and it slips LIMIT fills — TradingView does not
+
+MEASURED per fill, not inferred from a P&L aggregate. `rsi-mean-reversion` on EURUSD H1,
+2022-01-01 .. 2022-07-01, comparing every fill against the price it would have had with slippage
+switched off — a market fill against its bar's open, a stop or limit fill against its resting level
+from the order log (or the bar's open where price gapped through it):
+
+| fill type | control, `slippage=0` | `slippage=15`         |
+| --------- | --------------------- | --------------------- |
+| market    | 89 fills, 0.00 ticks  | 89 fills, 15.00 ticks |
+| stop      | 53 fills, 0.00 ticks  | 59 fills, 15.00 ticks |
+| limit     | 36 fills, 0.00 ticks  | 30 fills, 15.00 ticks |
+
+Every fill of every type moves by exactly the configured amount, and the control confirms the
+references are exact — all three types measure 0.00 ticks with slippage off.
+
+**TradingView never slips a limit order.** A limit fills at its price or better by definition; TV
+applies slippage to market and stop orders only. So a bracket strategy is charged slippage on both
+legs here and on one leg there. This is surfaced as a `divergent-strategy-prop` compatibility warning
+rather than an "ignored prop" warning — the prop IS applied, which is exactly why the difference
+matters.
+
+Note the fill counts move between the two runs (53 -> 59 stops, 36 -> 30 limits): slippage changes
+fill prices, which changes which orders survive and where. That is why an aggregate P&L swing cannot
+answer this question and the measurement has to be per fill.
+
 ### Reading the coverage docs correctly
 
 - **An empty status cell means NOT IMPLEMENTED.** There is exactly one ❌ in the entire doc set

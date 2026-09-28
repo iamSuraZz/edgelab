@@ -8,9 +8,10 @@ import type {
   SymbolSpec,
   AccountMoney,
 } from '@edgelab/shared';
-import { ZERO_COSTS, priceBasisForSource } from '@edgelab/shared';
+import { ExitLevelIndex, ZERO_COSTS, priceBasisForSource } from '@edgelab/shared';
 
 import { applyCosts, resolveQuoteToAccount, type QuoteToAccount } from './costs';
+import { measureFillSlippage, summariseSlippage, type SlippageByType } from './slippage';
 import {
   MissingConversionDataError,
   conversionWindow,
@@ -95,6 +96,8 @@ export interface OrchestratedRun {
   readonly crossCheck: CrossCheck;
   readonly engineMs: number;
   readonly totalMs: number;
+  /** Measured slippage per fill type, so a report can state which fills actually slip. */
+  readonly slippageByType: readonly SlippageByType[];
 }
 
 export async function orchestrateRun(params: OrchestrateParams): Promise<OrchestratedRun> {
@@ -168,6 +171,43 @@ export async function orchestrateRun(params: OrchestrateParams): Promise<Orchest
   // wrong for the feed underneath it.
   const basis = priceBasisForSource(params.source);
 
+  // Slippage is MEASURED per fill against its unslipped reference, so the waterfall's slippage line
+  // equals what was actually charged. The exit levels come from the run's own order log, which is
+  // what separates a stop fill from a limit fill from a market close.
+  const exitLevels = new ExitLevelIndex(engineResult.orderLog);
+  // Which ids name a resting bracket. A trade closed by anything else — a reversal's entry id, a
+  // margin call — filled at market, and its exit must not be measured against a level.
+  const bracketIds = new Set(
+    engineResult.orderLog
+      .filter((r) => r.method === 'exit' && typeof r.args['id'] === 'string')
+      .map((r) => r.args['id'] as string),
+  );
+  const entriesMayRest = engineResult.orderLog.some(
+    (r) =>
+      (r.method === 'entry' || r.method === 'order') &&
+      (Number.isFinite(r.args['limit']) || Number.isFinite(r.args['stop'])),
+  );
+
+  const measuredSlippage = measureFillSlippage({
+    trades: engineResult.trades,
+    bars: engineResult.bars,
+    symbol: params.symbol,
+    entriesMayRest,
+    exitLevelsFor: (trade) =>
+      exitLevels.size === 0 || trade.exitId === null || !bracketIds.has(trade.exitId)
+        ? null
+        : exitLevels.levelsOnBar(
+            trade.exitBar ?? 0,
+            {
+              side: trade.side,
+              entryPrice: trade.entryPrice,
+              mintick: params.symbol.mintick,
+            },
+            trade.entryBar,
+            trade.exitId,
+          ),
+  });
+
   const costed = applyCosts({
     trades: engineResult.trades,
     bars: engineResult.bars,
@@ -175,6 +215,7 @@ export async function orchestrateRun(params: OrchestrateParams): Promise<Orchest
     config: params.costs,
     quoteToAccount,
     basis,
+    measuredSlippage,
   });
 
   report(60, 'reconstructing equity');
@@ -254,6 +295,7 @@ export async function orchestrateRun(params: OrchestrateParams): Promise<Orchest
     crossCheck,
     engineMs,
     totalMs: Date.now() - startedAt,
+    slippageByType: summariseSlippage(measuredSlippage, params.symbol.mintick),
   };
 }
 

@@ -482,6 +482,16 @@ function printRun(label: string, runId: string, run: OrchestratedRun, warningCou
   if (warningCount > 0) {
     console.log(`   ${'Compatibility'.padEnd(20)} ${String(warningCount)} warning(s)`);
   }
+  // Measured, per fill type — the only way to tell whether a limit fill actually slips.
+  if (run.slippageByType.length > 0) {
+    const shown = run.slippageByType
+      .map(
+        (r) =>
+          `${r.type} ${String(r.fills)} fills ${r.meanTicks.toFixed(2)}t (${String(r.slipped)} slipped)`,
+      )
+      .join(', ');
+    console.log(`   ${'Slippage by fill'.padEnd(20)} ${shown}`);
+  }
   console.log(`   ${'Cross-check'.padEnd(20)} ${run.crossCheck.ok ? 'PASS' : 'FAIL'}`);
   if (!run.crossCheck.ok) console.log(`   ${run.crossCheck.message}`);
 

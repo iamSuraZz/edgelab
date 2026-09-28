@@ -1227,3 +1227,53 @@ against -0.89 pips). The named cause is that scaling costs changed the trade set
 changes which orders survive a margin check — so net profit is not linear in the multiplier while the
 analytical form assumes it is. That non-linearity is itself a result worth reporting: an edge whose
 break-even moves when execution moves is more fragile than a single number suggests.
+
+## A28 · Slippage measured per fill: PineTS slips limit fills, TradingView does not
+
+A27 concluded that PineTS charges slippage on both legs from an aggregate: switching slippage on moved
+net profit by $34.70 per trade against $15 per fill. That reasoning was not sound. The same change
+also moves fill prices, which changes which orders survive and where they exit, so the swing mixes
+slippage-per-fill with a changed trade set and cannot separate them. The conclusion happened to be
+right; the evidence did not support it.
+
+Measured properly now: every fill is compared against the price it would have had with slippage off —
+a market fill against its bar's open, a stop or limit fill against its resting level from the order
+log, or against the bar's open where price gapped through the level, since a gap is not slippage.
+
+`rsi-mean-reversion`, EURUSD H1, 2022-01-01 .. 2022-07-01:
+
+| fill type | control, `slippage=0` | `slippage=15`         |
+| --------- | --------------------- | --------------------- |
+| market    | 89 fills, 0.00 ticks  | 89 fills, 15.00 ticks |
+| stop      | 53 fills, 0.00 ticks  | 59 fills, 15.00 ticks |
+| limit     | 36 fills, 0.00 ticks  | 30 fills, 15.00 ticks |
+
+**Limit fills are slipped**, by exactly the configured amount, like every other type. TradingView
+never slips a limit order — it fills at its price or better by definition — so this is a real
+divergence. Recorded in `docs/pinets-notes.md` and surfaced as a `divergent-strategy-prop`
+compatibility warning, deliberately NOT as the existing "ignored prop" warning: telling a user that
+`slippage` is ignored while it is charging them on every fill would be worse than silence.
+
+The control is what makes the measurement trustworthy — all three fill types measure exactly 0.00
+ticks with slippage off, so the reference prices are right rather than approximately right. And the
+fill counts moving between the two runs (53 -> 59 stops, 36 -> 30 limits) is the confound made
+visible: it is precisely why the aggregate could not answer this.
+
+**The classifier had to be rewritten to see it.** The first version identified a stop or limit fill by
+proximity to its level, within five ticks. With fifteen ticks of slippage configured, every slipped
+limit fill missed that tolerance and was reclassified as a market fill — so the run reported ZERO
+limit fills on a bracket strategy, and market fills averaging -25 ticks against a reference that had
+silently become the bar open. Proximity cannot identify a fill when the quantity being measured is
+how far the fill moved. Classification now comes from the exit ID in the order log, which says which
+order closed each trade; only stop-versus-target is decided by distance, and those two can never be
+confused because a long's target is always above its stop.
+
+**The waterfall's slippage line is now these measured amounts**, not `2 x slippagePoints x mintick x
+units`. On this fixture the two agree to the cent, because every fill does slip by the configured
+amount — but that is a coincidence of this strategy, not a guarantee, and a gap fill referenced
+against the bar's open would break it. The point is that the costs shown are now the costs charged by
+construction rather than by luck.
+
+Cross-check re-run afterwards, unchanged: zero-slippage agrees exactly (0.84 pips per side either
+way, break-even 5.22x actual costs); with slippage the two sit 6.1% apart with the moving trade set
+as the named cause.
