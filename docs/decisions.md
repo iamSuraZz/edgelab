@@ -1357,7 +1357,6 @@ unresolvable multi-bracket exits (A25), so a straight substitution would silentl
 spread on precisely the trades it cannot measure — turning a modelling gap into free execution. That
 has to be closed first, which is what A26 (trailing-stop replay) is for.
 
-
 ## A32 · Out-of-sample split
 
 The first 70% of the window is where fit is measured, the last 30% is the honesty test. The question
@@ -1382,11 +1381,11 @@ Every ratio guards its denominator rather than checking the result afterwards, p
 
 **It discriminates on real data.** EURUSD H1, 2022-01-01 .. 2022-07-01, split at 70%:
 
-| fixture             | in-sample | out-of-sample | verdict  |
-| ------------------- | --------- | ------------- | -------- |
-| rsi-mean-reversion  | PF 1.10   | PF 1.75       | **pass** |
-| supertrend-atr      | +5,187.75 | **-487.88**   | **fail** |
-| bollinger-breakout  | +4,270.92 | **-3,219.33** | **fail** |
+| fixture            | in-sample | out-of-sample | verdict  |
+| ------------------ | --------- | ------------- | -------- |
+| rsi-mean-reversion | PF 1.10   | PF 1.75       | **pass** |
+| supertrend-atr     | +5,187.75 | **-487.88**   | **fail** |
+| bollinger-breakout | +4,270.92 | **-3,219.33** | **fail** |
 
 Two of the three fixtures that looked profitable over the full window do not survive the split. That
 is the check earning its place on the first real run.

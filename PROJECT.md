@@ -95,7 +95,7 @@ pnpm run import:file mt5 EURUSD <abs.csv> 120        # 120 = broker server UTC o
 
 ## Current status — NOT v1.0
 
-Green: `build` 9/9, `typecheck` 16/16, `lint` clean, **843 tests** (`pnpm test`).
+Green: `build` 9/9, `typecheck` 16/16, `lint` clean, **856 tests** (`pnpm test`).
 CI runs all five checks on every push — see `.github/workflows/ci.yml`.
 
 **Verified against the real docker stack:**
@@ -170,10 +170,18 @@ roadmap's "in the browser" is NOT met.
 | CI on the public repo (A9)                                         | see badge / Actions tab      |
 | Exness imports + MT5 parity test (A12)                             | **NOT PLANNED** — no exports |
 
-**Execution bias is COMPLETE.** Still to build in step 1, in this order: OOS split, walk-forward
-(A3 timing first), **sealed holdout** (A17), timeframe matrix + regimes, and Monte Carlo. Each must
-run through `pnpm validate` on the 2022 data before the next starts. A24 records four constraints
-agreed ahead of those steps; A26 records the trailing-stop replay as a post-slice-D follow-up.
+**Execution bias is COMPLETE, and the OOS split (A32) is done and verified.** Still to build in step
+1, in this order: walk-forward (A3 timing first), **sealed holdout** (A17), timeframe matrix +
+regimes, and Monte Carlo. Each must run through `pnpm validate` on the 2022 data before the next
+starts. A24 records four constraints agreed ahead of those steps; A26 (trailing-stop replay), A30
+(regime mix in the OOS report) and A31 (spread on resting fills from the replay) are post-slice-D
+follow-ups.
+
+**The OOS split discriminates on its first real run.** Each segment is its own run from the same
+starting capital (A24), never a slice — a slice would inherit position sizes grown by in-sample
+profits. On EURUSD H1 2022-01-01 .. 2022-07-01: `rsi-mean-reversion` passes (PF 1.10 -> 1.75), while
+**`supertrend-atr` (+5,187.75 -> -487.88) and `bollinger-breakout` (+4,270.92 -> -3,219.33) both
+fail** — two of the three fixtures that looked profitable over the full window do not survive.
 
 **Price basis is now explicit per feed (A19).** `bid` for Dukascopy and MT5 imports, `mid` for Twelve
 Data, `last` for Binance klines (trade prints, treated as mid, labelled separately). `deriveQuotes`
