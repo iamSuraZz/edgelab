@@ -1844,3 +1844,24 @@ One denominator guard, in the same family as A24, A32 and A36: the cost share is
 gross is strictly POSITIVE. Against a negative gross the ratio flips sign and reads as though costs
 were a credit — the first run printed "M15 costs -37% of gross" on a cell that lost 3,200 before
 costs. It now prints the cost amount instead.
+
+## A46 · Follow-up after slice D: one ratio helper with a declared denominator rule
+
+Four times in this slice a ratio has been wrong because its denominator was not guarded, and each was
+found separately, after the fact, by reading output that looked odd:
+
+- **A24/A32** — walk-forward efficiency and the OOS return ratio against a non-positive in-sample
+  return: two losses divide into a flattering positive number.
+- **A32** — the same ratio against a near-zero positive return: 0.60% against 11.49% printed as
+  "kept 1911%".
+- **A36** — raw returns over windows of different lengths, scoring an unchanged strategy at 0.33.
+- **A45** — cost share against a negative gross, printing "costs -37% of gross" on a cell that lost
+  money before costs.
+
+The pattern is identical every time: a ratio is formed, the result is inspected afterwards, and the
+inspection is forgotten in the next place. A shared helper that will not compute a ratio without
+being told the rule — `strictlyPositive`, `minimumMagnitude`, `sameScale` — turns four remembered
+conventions into one the compiler asks for at every call site.
+
+Not now: the four call sites are correct as they stand, and replacing working guards mid-slice buys
+nothing. It belongs with the other post-slice-D cleanups (A26, A31).
