@@ -242,8 +242,18 @@ export function PriceChart({
   }, [focusedSeq, focusedAtMs, trades, theme, candles.data]);
 
   return (
-    <div className="relative h-full min-h-0" data-testid="price-chart">
-      <div ref={hostRef} className="h-full min-h-0" />
+    /*
+     * `absolute inset-0`, not `h-full` (A55).
+     *
+     * Lightweight Charts sizes itself from this element, so a zero-height host is an invisible
+     * chart. `h-full` is a PERCENTAGE height, and a percentage resolves only against a parent with
+     * a definite `height` — through this particular chain (a flex item whose height comes from a
+     * `min-height` floor) it resolved to 0 and the chart vanished on the run report page. An
+     * absolutely positioned box with all four insets set takes its size from the containing block
+     * directly, with no percentage to resolve, so it cannot collapse this way again.
+     */
+    <div className="absolute inset-0" data-testid="price-chart">
+      <div ref={hostRef} className="absolute inset-0" />
 
       {focusNote !== null && (
         <p
@@ -349,6 +359,8 @@ function snapToBar(
   const span = (list: readonly { readonly time: number }[]): number =>
     list.length < 2 ? 3_600 : Math.round((list[1]!.time - list[0]!.time) / 1000);
 
+  // Nothing drawn yet: mark the instant as given and say nothing, because a note about which bar
+  // it landed on would be describing bars that are not on screen.
   if (candles === undefined || candles.length === 0) {
     return { atMs, barSpanSeconds: 3_600, note: null };
   }
@@ -361,14 +373,14 @@ function snapToBar(
     return {
       atMs: first,
       barSpanSeconds,
-      note: `That instant (${iso(atMs)}) is before this chart's first bar, so the marker sits on the earliest bar shown.`,
+      note: `That instant (${iso(atMs)}) is before this chart's first bar, so the marker sits on the earliest bar shown, ${iso(first)}.`,
     };
   }
   if (atMs > last + barSpanSeconds * 1000) {
     return {
       atMs: last,
       barSpanSeconds,
-      note: `That instant (${iso(atMs)}) is after this chart's last bar, so the marker sits on the latest bar shown.`,
+      note: `That instant (${iso(atMs)}) is after this chart's last bar, so the marker sits on the latest bar shown, ${iso(last)}.`,
     };
   }
 
@@ -383,9 +395,16 @@ function snapToBar(
   return {
     atMs: containing,
     barSpanSeconds,
+    /*
+     * Always say what was marked, even when nothing had to be snapped.
+     *
+     * The marker is drawn on the chart's canvas, so on its own it is a thin dotted line the reader
+     * has to find and then trust. Naming the bar turns "the chart moved" into "the chart is showing
+     * THIS bar", which is the claim the evidence actually made.
+     */
     note:
       containing === atMs
-        ? null
+        ? `Marked ${iso(atMs)} — the bar the evidence names.`
         : `Evidence is at ${iso(atMs)}; this chart's bars are ${formatSpan(barSpanSeconds)}, so the marker is on the bar opening ${iso(containing)}.`,
   };
 }

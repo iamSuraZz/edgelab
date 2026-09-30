@@ -15,7 +15,14 @@ import { useState } from 'react';
 export interface HoldoutActionProps {
   readonly sealedFromMs: number | null;
   readonly viewCount: number;
-  readonly retiredSeals: number;
+  /**
+   * Seals retired on this symbol before this one, or null when the caller does not know.
+   *
+   * Null is NOT zero here: "no seal was ever retired" is a claim about how untouched this ground
+   * is, and asserting it from a value nobody looked up is the kind of reassuring default A38 exists
+   * to prevent.
+   */
+  readonly retiredSeals: number | null;
   /** Runs the suite with the seal lifted. The caller performs it; this only confirms. */
   readonly onTestOnHoldout: () => void;
   readonly busy?: boolean;
@@ -46,7 +53,7 @@ export function HoldoutAction({
           {viewCount} time{viewCount === 1 ? '' : 's'}
         </strong>
         .
-        {retiredSeals > 0 && (
+        {retiredSeals !== null && retiredSeals > 0 && (
           <>
             {' '}
             {retiredSeals} earlier seal{retiredSeals === 1 ? ' was' : 's were'} retired on this

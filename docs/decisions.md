@@ -2113,3 +2113,42 @@ UTC, and a string that is not a timestamp at all.
 > Slice F's "browser-verified" was true of the _page_ and false of the _endpoint_: `shell.smoke.ts`
 > runs without a backend, so the Runs page was only ever proven against fixtures. Verified here
 > against the docker stack — the list returns all runs with their KPIs.
+
+## A55 — The price chart rendered at zero height on the run report page
+
+The verification sprint fixed "the Studio's Chart tab rendered at zero height" by putting a
+`min-h-[20rem]` floor on the tab's wrapper. That floored the WRAPPER. The chart inside it kept
+`h-full min-h-0`, and `min-h-0` is an explicit instruction to have no floor at all.
+
+Measured in the browser on `/runs/:runId`, walking up from the chart:
+
+| element                        | used height |
+| ------------------------------ | ----------- |
+| `[data-testid=price-chart]`    | **0px**     |
+| wrapper `h-full min-h-[20rem]` | 320px       |
+| `min-h-0 flex-1 overflow-auto` | 320px       |
+
+A percentage height resolves only against a parent with a definite `height`. Through this chain the
+parent's 320px comes from a `min-height` floor rather than from `height`, so `h-full` resolved to 0
+and Lightweight Charts sized itself to nothing. Playwright reports the element as _hidden_, which is
+what it is: present in the DOM, zero pixels on screen.
+
+**Decision: the chart fills its container by `absolute inset-0`, not by `h-full`.** An absolutely
+positioned box with all four insets set takes its size from the containing block directly, with no
+percentage to resolve, so it cannot collapse this way again whatever the ancestors do. The tab
+wrapper becomes `relative` — it is the containing block, and its `min-h-80` floor is now what the
+chart actually inherits.
+
+> Same root cause as the sprint's finding, one level down, and it survived because the sprint's fix
+> was verified by looking at the Studio. Caught here only because slice D's DONE WHEN clicks a piece
+> of evidence and demands the chart jump to it — the first test that ever asserted the chart was
+> _visible_ rather than present.
+
+**The focus note now always names the marked bar**, instead of only speaking up when an instant had
+to be snapped or fell outside the range. The marker is a dotted line on a canvas: on its own it asks
+the reader to find it and trust it. Naming the bar turns "the chart moved" into "the chart is showing
+the bar the evidence named", and it is the only part of the jump a test can assert at all.
+
+`HoldoutAction`'s `retiredSeals` became `number | null` in the same pass. The tab does not carry a
+retired count, and passing `0` would have stated "no seal was ever retired on this symbol" —
+a claim, not a default — on a symbol where four had been.

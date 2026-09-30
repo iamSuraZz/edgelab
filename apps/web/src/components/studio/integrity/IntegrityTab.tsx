@@ -139,7 +139,10 @@ export function IntegrityTab({
           </button>
         ) : (
           <>
-            <span className="inline-flex items-center gap-1.5 text-xs text-muted">
+            <span
+              className="inline-flex items-center gap-1.5 text-xs text-muted"
+              data-testid="validation-progress"
+            >
               <Loader2 className="h-3 w-3 animate-spin" />
               {progress?.percent ?? 0}% — {progress?.message ?? 'starting'}
             </span>
@@ -182,7 +185,7 @@ export function IntegrityTab({
         )}
 
         {report !== null && detail.data !== undefined && (
-          <>
+          <div data-testid="validation-report">
             <VerdictHeader
               results={report.results as never}
               context={detail.data.context}
@@ -194,7 +197,8 @@ export function IntegrityTab({
                 <HoldoutAction
                   sealedFromMs={detail.data.context.rangeToMs}
                   viewCount={detail.data.context.holdoutViewCount ?? 0}
-                  retiredSeals={0}
+                  // Not carried on the validation context; the holdout check's own card reports it.
+                  retiredSeals={null}
                   onTestOnHoldout={() => {
                     // Not yet wired to an endpoint: the confirmation exists so the consequence is
                     // stated, and running against sealed data needs an unseal route the API does
@@ -216,22 +220,18 @@ export function IntegrityTab({
                     {...(onJumpToTrade === undefined ? {} : { onJumpToTrade })}
                   />
                 );
-                const hasVisual =
-                  (visual as React.ReactElement<{ checkId: string }>).props.checkId !== undefined &&
-                  VISUAL_CHECKS.has(check.id);
-
                 return (
                   <CheckCard
                     key={check.id}
                     check={check}
-                    {...(hasVisual ? { visual } : {})}
+                    {...(VISUAL_CHECKS.has(check.id) ? { visual } : {})}
                     {...(onJumpToTime !== undefined ? { onJumpToTime } : {})}
                     {...(onJumpToTrade !== undefined ? { onJumpToTrade } : {})}
                   />
                 );
               })}
             </div>
-          </>
+          </div>
         )}
       </div>
     </div>

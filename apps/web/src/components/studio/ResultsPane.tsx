@@ -149,11 +149,16 @@ export function ResultsPane({
         </Banner>
       )}
 
-      <nav className="flex shrink-0 gap-0.5 overflow-x-auto border-b border-border px-2">
+      <nav
+        className="flex shrink-0 gap-0.5 overflow-x-auto border-b border-border px-2"
+        role="tablist"
+      >
         {TABS.map((name) => (
           <button
             key={name}
             type="button"
+            role="tab"
+            aria-selected={tab === name}
             onClick={() => {
               setTab(name);
             }}
@@ -180,7 +185,7 @@ export function ResultsPane({
           chart under about 20rem is not usable.
         */}
         {tab === 'Overview' && (
-          <div className="h-full min-h-[20rem] p-2">
+          <div className="h-full min-h-80 p-2">
             {series.data === undefined ? (
               <Loading />
             ) : (
@@ -216,7 +221,9 @@ export function ResultsPane({
         )}
 
         {tab === 'Chart' && (
-          <div className="h-full min-h-[20rem]">
+          // `relative`: this is the chart's containing block, and it is the element whose
+          // `min-h-80` floor the chart now inherits by filling it (A55).
+          <div className="relative h-full min-h-80">
             <PriceChart
               symbol={detail.config.symbol}
               timeframe={detail.config.timeframe}
