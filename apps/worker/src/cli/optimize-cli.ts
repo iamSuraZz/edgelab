@@ -165,6 +165,15 @@ function printReport(report: Awaited<ReturnType<typeof optimizeRun>>): void {
       `estimated ${(report.estimate.estimatedMs / 1000).toFixed(1)}s, actual ` +
       `${(report.elapsedMs / 1000).toFixed(1)}s\n`,
   );
+  if (report.estimate.isLowerBound) {
+    // Said out loud rather than left for the reader to discover by waiting (A56).
+    process.stdout.write(
+      `  note: folds are ${String(report.estimate.barsPerInSampleFold)} bars against a ` +
+        `${String(report.estimate.calibratedBarsPerFold)}-bar calibration, so the estimate is a ` +
+        `floor, not a prediction.
+`,
+    );
+  }
   process.stdout.write(
     `  grid ${String(r.gridSize)} combination(s), ran ${String(r.combinationsRun)}` +
       `${r.sampled ? ' (sampled)' : ''}\n\n`,

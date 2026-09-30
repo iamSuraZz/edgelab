@@ -2152,3 +2152,50 @@ the bar the evidence named", and it is the only part of the jump a test can asse
 `HoldoutAction`'s `retiredSeals` became `number | null` in the same pass. The tab does not carry a
 retired count, and passing `0` would have stated "no seal was ever retired on this symbol" —
 a claim, not a default — on a symbol where four had been.
+
+## A56 — The optimisation ETA ignores the window it is estimating
+
+Measured on the two-year acceptance run: **estimated 14.2s, actual 84.6s** — 6x low, on the dataset
+slice D's acceptance gate is defined against.
+
+`estimateOptimization` accepts `barsPerFold` and never reads it. Both calibration runs behind its
+constants were six months of H1, so the model is a flat cost per run whatever window it is asked
+about. The three measurements now on record:
+
+| runs | threads | in-sample fold | actual | predicted |
+| ---- | ------- | -------------- | ------ | --------- |
+| 40   | 7       | ~3,100 bars    | 13.8s  | 13.5s     |
+| 204  | 7       | ~3,100 bars    | 24.2s  | 23.9s     |
+| 51   | 7       | 8,760 bars     | 84.6s  | 14.2s     |
+
+Bars per fold rose 2.8x and cost per run-slot rose **22.8x**, so this is not the engine term — A33
+puts that at 0.042ms/bar. The likely dominant term is the M1 read behind each candidate, which
+scales with the M1 SPAN and the number of distinct windows times threads, not with the run count,
+and which the model does not contain at all.
+
+**Decision: do NOT re-fit from one new point.** Three heterogeneous measurements cannot determine a
+two-parameter model, and inventing a coefficient to make this run fit is precisely the error the
+check it belongs to exists to catch. The estimate now carries `calibratedBarsPerFold` and
+`isLowerBound`, and the CLI prints "estimated at least 14.2s" with the calibration named whenever a
+run's folds exceed the calibration by more than half. **A figure known to be low is worse than no
+figure** when the reader is deciding whether to wait for it.
+
+> **Follow-up (after slice D):** instrument the M1 read separately from engine time inside the
+> optimisation task and fit a two-term model — pool startup plus a per-window read plus a per-run
+> engine cost. That needs deliberate measurement across at least two window sizes and two fold
+> counts, not a back-fit.
+
+### The acceptance gate
+
+Both halves ran end to end on `EURUSD.twelvedata`, 2022-01-01 .. 2024-01-01, H1, 361 trades:
+
+- **full suite** — 17 checks, **68s**, verdict `fail`;
+- **walk-forward optimisation** — 16 combinations, 3 folds, 51 runs on 7 threads, **84.6s**,
+  verdict `n/a`.
+
+The optimisation's `n/a` is A24's guard, not a gap: every fold's best in-sample candidate still lost
+money (-492, -1,068, -475), so there is no in-sample edge whose persistence WFE could measure. The
+suite's three `n/a`s are the same guard in three places — cost stress has no break-even to find
+because the run is unprofitable at 0x costs, and neither OOS check has a profitable in-sample half.
+**A strategy with nothing to overfit is the one case where these checks must say so instead of
+scoring it**, and on the acceptance data they do.

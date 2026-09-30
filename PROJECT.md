@@ -100,18 +100,19 @@ CI runs all five checks on every push — see `.github/workflows/ci.yml`.
 
 **Verified against the real docker stack:**
 
-| check             | result | covers                                               |
-| ----------------- | ------ | ---------------------------------------------------- |
-| `pnpm test:e2e`   | 36/36  | **slice B DONE WHEN**, and **all of slice D step 2** |
-| `pnpm test:smoke` | 23/23  | **slice C DONE WHEN**, and slice F's browser work    |
+| check             | result | covers                                                        |
+| ----------------- | ------ | ------------------------------------------------------------- |
+| `pnpm test:e2e`   | 36/36  | **slice B DONE WHEN**, and **all of slice D step 2**          |
+| `pnpm test:smoke` | 23/23  | **slice C DONE WHEN**, and slice F's browser work             |
+| `integrity.smoke` | 4/4    | **slice D DONE WHEN** — validate → verdict → evidence → chart |
 
-**Slices A, B and C are DONE and verified.** **Slice D is IN PROGRESS — step 1 (validation engine
-
-- `pnpm validate`) is done and exercised on the real stack; steps 2 and 3 are not started, so its
-  DONE WHEN ("in the browser") is not met.** Slice E's currency layer is **done and hand-verified**; its
-  Data page and dashboard work is not started. Slice F is built and browser-verified except the
-  deployment. See `docs/spec/08-roadmap.md` for the slices and `docs/decisions.md` for D1–D8, A1–A5
-  and the verification-sprint findings, which override the specs.
+**Slices A, B, C and D are DONE and verified.** Slice D's three steps — the validation engine, the
+API (`POST /backtests/:id/validate` + `/optimize` with SSE and cancel) and the "Integrity &
+Overfitting" tab — are all built, and its DONE WHEN has been met **in a real browser**: see
+"Slice D — verified" below. Slice E's currency layer is **done and hand-verified**; its
+Data page and dashboard work is not started. Slice F is built and browser-verified except the
+deployment. See `docs/spec/08-roadmap.md` for the slices and `docs/decisions.md` for D1–D8, A1–A5
+and the verification-sprint findings, which override the specs.
 
 > **The verification sprint found eight real defects in code that compiled, linted and passed 616
 > unit tests.** Worth remembering before trusting any future "code complete" claim here: the API
@@ -157,9 +158,31 @@ rate-limited nights, `pnpm backfill` and `GET /api/data/coverage` report
 
 ### Slice D — what exists, what does not
 
-**Step 1 is PARTIAL — only the look-ahead family landed.** The prerequisites below are done and
-verified on real data. Steps 2 (endpoint + SSE) and 3 (Integrity tab) are not started, so the
-roadmap's "in the browser" is NOT met.
+**All three steps are done and the DONE WHEN is met.** The prerequisites below are done and verified
+on real data.
+
+### Slice D — verified in the browser
+
+`apps/web/test/smoke/integrity.smoke.ts`, 4/4 against the docker stack, on the leaky fixture
+(`Look-ahead leak`, EURUSD H1 2022-01-01..2022-07-01) because a passing run cannot prove any of it:
+
+| what                                     | evidence                                |
+| ---------------------------------------- | --------------------------------------- |
+| validate from the browser → verdict      | honesty **No**, robustness as counts    |
+| the leaky fixture names its line         | `Line 8`, `lookahead_on`                |
+| first divergent bar                      | splice `2022-04-14 09:00`               |
+| click evidence → chart jumps             | causality **bar 0**, `2022-01-02 23:00` |
+| clean fixture (`EMA Cross`, same window) | all 4 look-ahead checks **pass**        |
+
+The clean fixture's four failures are all `overfitting-*`: it is HONEST and its edge does not hold
+up, which is the distinction A52's two questions exist to keep visible.
+
+**The acceptance gate ran end to end on `EURUSD.twelvedata` 2022-01-01 .. 2024-01-01** (H1, 361
+trades): the full suite in **68s** (17 checks, verdict `fail`) and a walk-forward optimisation in
+**84.6s** (16 combinations, 3 folds, 51 runs on 7 threads, verdict `n/a`). Four `n/a`s across the two
+are A24's guard firing, not gaps — the strategy loses money over the window, so there is no in-sample
+edge whose persistence WFE or the OOS split could measure, and no break-even for cost stress to find.
+**The ETA was 6x low there (A56): it ignores the window it is estimating, and now says so.**
 
 | prerequisite                                                       | state                        |
 | ------------------------------------------------------------------ | ---------------------------- |
@@ -372,14 +395,14 @@ keeping both layers: truncation covers unbounded leaks, splicing covers bounded 
 | Integrity tab: visuals, optimisation panel, holdout action | **not started**               |
 | "Integrity & Overfitting" tab (step 3)                     | **not started**               |
 
-| Phase              | Core            | API                  | UI                   |
-| ------------------ | --------------- | -------------------- | -------------------- |
-| 02 market data     | done, verified  | **code, unverified** | **code, unverified** |
-| 03 Pine engine     | done, verified  | **code, unverified** | **code, unverified** |
-| 04 runs/costs/eqty | **done** (CLI)  | **code, unverified** | **code, unverified** |
-| 05 metrics         | done, verified  | **code, unverified** | **code, unverified** |
-| 06 validation      | **step 1 DONE** | ✗                    | ✗                    |
-| 07 deployment      | done, verified  | n/a                  | ✗                    |
+| Phase              | Core           | API                  | UI                   |
+| ------------------ | -------------- | -------------------- | -------------------- |
+| 02 market data     | done, verified | **code, unverified** | **code, unverified** |
+| 03 Pine engine     | done, verified | **code, unverified** | **code, unverified** |
+| 04 runs/costs/eqty | **done** (CLI) | **code, unverified** | **code, unverified** |
+| 05 metrics         | done, verified | **code, unverified** | **code, unverified** |
+| 06 validation      | **DONE**       | done, verified       | **done, verified**   |
+| 07 deployment      | done, verified | n/a                  | ✗                    |
 
 **The CLI end-to-end backtest is verified; the HTTP one is not.** `pnpm backtest` chains engine →
 costs → equity → metrics, persists the run and prints the KPIs. Slice B adds the same chain over
