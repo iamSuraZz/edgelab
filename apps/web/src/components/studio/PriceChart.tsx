@@ -9,7 +9,7 @@ import {
   type SeriesMarker,
   type UTCTimestamp,
 } from 'lightweight-charts';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { CostedTrade, Timeframe } from '@edgelab/shared';
 
 import { fetchCandles } from '@/lib/api';
@@ -47,6 +47,15 @@ export function PriceChart({
   const theme = useThemeStore((s) => s.theme);
   const focusedSeq = useStudio((s) => s.focusedTradeSeq);
   const focusedAtMs = useStudio((s) => s.focusedAtMs);
+  /**
+   * Set when a focused instant could not be shown as given.
+   *
+   * Two cases, both worth saying out loud rather than silently centring on something else: the
+   * instant lies outside the range this chart draws, or it was SNAPPED to the bar containing it.
+   * The M1 replay reports minute-level evidence — a stop crossed at 09:37 — while the chart may be
+   * showing H1, and jumping to "09:37" on an H1 chart can only mean the 09:00 bar.
+   */
+  const [focusNote, setFocusNote] = useState<string | null>(null);
 
   const candles = useQuery({
     queryKey: ['candles', symbol, timeframe, fromMs, toMs],
@@ -167,14 +176,27 @@ export function PriceChart({
      */
     if (focusedSeq === null) {
       if (focusedAtMs === null) return;
-      markInstant(chart, focusedAtMs, chartPalette(theme), levelLinesRef);
+      setFocusNote(
+        markInstant(chart, focusedAtMs, chartPalette(theme), levelLinesRef, candles.data?.candles),
+      );
       return;
     }
 
+    setFocusNote(null);
     const trade = trades.find((t) => t.seq === focusedSeq);
     if (trade === undefined) {
       // A trade that is not in this run's list still has an instant worth showing.
-      if (focusedAtMs !== null) markInstant(chart, focusedAtMs, chartPalette(theme), levelLinesRef);
+      if (focusedAtMs !== null) {
+        setFocusNote(
+          markInstant(
+            chart,
+            focusedAtMs,
+            chartPalette(theme),
+            levelLinesRef,
+            candles.data?.candles,
+          ),
+        );
+      }
       return;
     }
 
@@ -217,11 +239,20 @@ export function PriceChart({
       from: (span[0] - pad) as UTCTimestamp,
       to: (span[1] + pad) as UTCTimestamp,
     });
-  }, [focusedSeq, focusedAtMs, trades, theme]);
+  }, [focusedSeq, focusedAtMs, trades, theme, candles.data]);
 
   return (
     <div className="relative h-full min-h-0" data-testid="price-chart">
       <div ref={hostRef} className="h-full min-h-0" />
+
+      {focusNote !== null && (
+        <p
+          className="absolute inset-x-2 top-2 z-10 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-xs text-amber-200"
+          data-testid="focus-note"
+        >
+          {focusNote}
+        </p>
+      )}
 
       {candles.isLoading && (
         <p className="absolute inset-0 grid place-items-center text-xs text-muted">
@@ -261,8 +292,10 @@ function markInstant(
   atMs: number,
   palette: ReturnType<typeof chartPalette>,
   linesRef: { current: ISeriesApi<'Line'>[] },
-): void {
-  const at = toUtcSeconds(atMs);
+  candles: readonly { readonly time: number }[] | undefined,
+): string | null {
+  const snapped = snapToBar(atMs, candles);
+  const at = toUtcSeconds(snapped.atMs);
 
   const marker = chart.addSeries(LineSeries, {
     color: palette.primary,
@@ -281,11 +314,88 @@ function markInstant(
   marker.applyOptions({ autoscaleInfoProvider: () => null });
   linesRef.current.push(marker);
 
-  // Four hours either side: enough to see what led into the bar, which is the whole point of
-  // jumping to it.
-  const pad = 4 * 3_600;
+  // Context either side, scaled to the bar size so an M1 chart is not shown four hours of bars and
+  // a D1 chart is not shown four hours of nothing.
+  const pad = Math.max(3_600, snapped.barSpanSeconds * 6);
   chart.timeScale().setVisibleRange({
     from: (at - pad) as UTCTimestamp,
     to: (at + pad) as UTCTimestamp,
   });
+
+  return snapped.note;
+}
+
+interface Snapped {
+  readonly atMs: number;
+  readonly barSpanSeconds: number;
+  /** What to tell the user, when the instant could not be shown exactly as given. */
+  readonly note: string | null;
+}
+
+/**
+ * Snap an instant to the chart bar containing it.
+ *
+ * Evidence is reported at the resolution the CHECK worked at, which is not the chart's: the M1
+ * intrabar replay finds a stop crossed at 09:37 on a chart drawn in hours. Centring on 09:37
+ * without saying so shows the 09:00 bar and lets the reader believe the evidence was about 09:00.
+ *
+ * An instant outside the drawn range is reported rather than clamped silently, because clamping
+ * would put the marker on a bar that has nothing to do with the finding.
+ */
+function snapToBar(
+  atMs: number,
+  candles: readonly { readonly time: number }[] | undefined,
+): Snapped {
+  const span = (list: readonly { readonly time: number }[]): number =>
+    list.length < 2 ? 3_600 : Math.round((list[1]!.time - list[0]!.time) / 1000);
+
+  if (candles === undefined || candles.length === 0) {
+    return { atMs, barSpanSeconds: 3_600, note: null };
+  }
+
+  const barSpanSeconds = span(candles);
+  const first = candles[0]!.time;
+  const last = candles[candles.length - 1]!.time;
+
+  if (atMs < first) {
+    return {
+      atMs: first,
+      barSpanSeconds,
+      note: `That instant (${iso(atMs)}) is before this chart's first bar, so the marker sits on the earliest bar shown.`,
+    };
+  }
+  if (atMs > last + barSpanSeconds * 1000) {
+    return {
+      atMs: last,
+      barSpanSeconds,
+      note: `That instant (${iso(atMs)}) is after this chart's last bar, so the marker sits on the latest bar shown.`,
+    };
+  }
+
+  // The last bar whose OPEN time is at or before the instant — a bar's time is its open (repo
+  // convention), so the bar containing 09:37 on H1 is the one opening at 09:00.
+  let containing = candles[0]!.time;
+  for (const c of candles) {
+    if (c.time > atMs) break;
+    containing = c.time;
+  }
+
+  return {
+    atMs: containing,
+    barSpanSeconds,
+    note:
+      containing === atMs
+        ? null
+        : `Evidence is at ${iso(atMs)}; this chart's bars are ${formatSpan(barSpanSeconds)}, so the marker is on the bar opening ${iso(containing)}.`,
+  };
+}
+
+function iso(ms: number): string {
+  return new Date(ms).toISOString().replace('T', ' ').slice(0, 16);
+}
+
+function formatSpan(seconds: number): string {
+  if (seconds < 3_600) return `${String(Math.round(seconds / 60))}m`;
+  if (seconds < 86_400) return `${String(Math.round(seconds / 3_600))}h`;
+  return `${String(Math.round(seconds / 86_400))}d`;
 }
