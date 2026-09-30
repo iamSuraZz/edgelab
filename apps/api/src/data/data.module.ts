@@ -25,6 +25,8 @@ import type { Redis } from 'ioredis';
 import {
   blockedNotice,
   coverageForAll,
+  readHoldoutFresh,
+  readM1,
   rateLimitStreak,
   copyBarsIgnoreDuplicates,
   bumpDataVersion,
@@ -41,6 +43,7 @@ import {
   DukascopyProvider,
   RedisBudget,
   TwelveDataProvider,
+  analyseQuality,
   streamExnessZip,
   streamMt5Csv,
 } from '@edgelab/data';
@@ -49,6 +52,7 @@ import {
   DailyCountsQuerySchema,
   ImportRequestSchema,
   jobCancelChannel,
+  type SessionType,
   IngestRequestSchema,
   SymbolPatchBodySchema,
   type CandlesQuery,
@@ -144,7 +148,20 @@ export class DataService {
           );
           if (notice !== null) notices.push(notice);
         }
-        return notices.length === 0 ? row : { ...row, blocked: notices };
+        /*
+         * The SEAL travels with the range it applies to (A59).
+         *
+         * Coverage is where you look to answer "what do I hold", and a holdout is precisely the
+         * part of it you are not allowed to hold. Showing the range without saying that the last
+         * fifth is withheld invites planning a run that will be silently truncated (A40).
+         */
+        const seal = await readHoldoutFresh(this.db, row.symbolId);
+        const holdout =
+          seal === null
+            ? null
+            : { id: seal.id, sealedFromMs: seal.sealedFromMs, viewCount: seal.viewCount };
+
+        return { ...row, ...(notices.length === 0 ? {} : { blocked: notices }), holdout };
       }),
     );
   }
@@ -243,6 +260,26 @@ export class DataService {
 
     await this.redis.publish(jobCancelChannel(jobId), '1');
     return { jobId, action: 'abort-signalled' };
+  }
+
+  /**
+   * The data-quality report for one symbol and range.
+   *
+   * Its own endpoint rather than a field on coverage, because it has to LOAD the bars: running it
+   * for every symbol on every page load would read the whole store to answer a question about one
+   * row. The UI asks for the symbol it is showing.
+   */
+  async quality(symbolCode: string, fromMs: number, toMs: number): Promise<unknown> {
+    const symbol = await this.requireSymbol(symbolCode);
+    // Through `readM1`, so a sealed range is truncated here exactly as it is everywhere else
+    // (A37) — a quality report over data the rest of the system refuses to read would be fiction.
+    const read = await readM1(this.db, symbol.id, fromMs, toMs);
+
+    return {
+      symbol: symbol.symbol,
+      truncation: read.truncation,
+      report: analyseQuality(read.bars, { sessionType: symbol.sessionType as SessionType }),
+    };
   }
 
   /** Per-day bar counts, for the calendar heatmap. */
@@ -437,6 +474,11 @@ export class DataController {
   @Get('data/coverage')
   coverage(): Promise<unknown> {
     return this.data.coverage();
+  }
+
+  @Get('data/quality')
+  quality(@Query(new ZodPipe(DailyCountsQuerySchema)) query: DailyCountsQuery): Promise<unknown> {
+    return this.data.quality(query.symbol, query.from, query.to);
   }
 
   @Get('data/daily-counts')

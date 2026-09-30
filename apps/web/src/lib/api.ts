@@ -619,6 +619,12 @@ export interface ProviderCard {
   readonly blocked: readonly string[];
 }
 
+export interface HoldoutView {
+  readonly id: string;
+  readonly sealedFromMs: number;
+  readonly viewCount: number;
+}
+
 export interface CoverageRow {
   readonly symbolId: string;
   readonly symbol: string;
@@ -628,6 +634,39 @@ export interface CoverageRow {
   readonly dataVersion: number;
   readonly sources: readonly string[];
   readonly blocked?: readonly string[];
+  /** The seal in force on this range, or null. Travels with coverage because it IS coverage (A59). */
+  readonly holdout: HoldoutView | null;
+}
+
+export interface QualityFindingView {
+  readonly count: number;
+  readonly truncated: boolean;
+}
+
+export interface QualityResponse {
+  readonly symbol: string;
+  readonly truncation: unknown | null;
+  readonly report: {
+    readonly completeness: number;
+    readonly missingMinutes: number;
+    readonly gaps: QualityFindingView;
+    readonly duplicateTimestamps: QualityFindingView;
+    readonly outOfOrderTimestamps: QualityFindingView;
+    readonly zeroRangeBars: QualityFindingView;
+    readonly fillerBars: QualityFindingView;
+    readonly spikes: QualityFindingView;
+    readonly spreadOutliers: QualityFindingView;
+    readonly invalidBars: QualityFindingView;
+  };
+}
+
+export function fetchQuality(
+  symbol: string,
+  fromMs: number,
+  toMs: number,
+): Promise<QualityResponse> {
+  const q = new URLSearchParams({ symbol, from: String(fromMs), to: String(toMs) });
+  return request(`/data/quality?${q.toString()}`);
 }
 
 export interface DayCount {

@@ -2423,3 +2423,35 @@ interface cannot keep.
 > The offset is the assertion that matters: MT5 writes the broker's wall clock with nothing in the
 > file naming the zone, so importing a GMT+2 export as UTC shifts every bar two hours in a way
 > nothing downstream can detect. 600 rows each, both labelled with their own source.
+
+## A64 — Coverage is per FEED, carries its seal, and reports quality on demand
+
+Rows are per feed, not per instrument: every symbol holds exactly one feed (A6) and a run spanning
+two is refused, so `EURUSD` and `EURUSD.twelvedata` are separate rows describing the same
+instrument. Merging them would hide the one distinction that decides whether a run is allowed.
+
+**The holdout seal travels with the range.** Coverage is where you look to answer "what do I hold",
+and a holdout is precisely the part you are not allowed to hold. A range shown without it invites
+planning a run that will be silently truncated (A40). The badge names the date and the view count.
+
+**Quality is its own endpoint**, not a field on coverage, because it has to LOAD the bars — running
+it per symbol on every page load would read the whole store to answer a question about one row. It
+reads through `readM1`, so a sealed range truncates there exactly as everywhere else (A37) and the
+report says so; a quality report over data the rest of the system refuses to read would be fiction.
+
+**Only findings are listed.** Nine rows of "0" train you to stop reading, and the one that is not
+zero then looks like the rest. Clean data says so in one line.
+
+The heatmap shades against a **full 1,440-minute day**, never against the busiest day in the range.
+Scaling to the local maximum paints a uniformly thin series as though it were complete.
+
+> **Verified in the browser.** EURUSD: 223,997 bars 2022-01-02 → 2024-02-11, completeness **28.3%**
+> — correct, not a bug: that symbol holds two islands with a year between them, and the report
+> covers first-to-last. Preview resamples consistently from stored M1 —
+> **M1 11,495 → M15 768 → H1 192 → H4 49 → D1 9 → W1 3** — which is spec 02's "display correctly on
+> every MT5 timeframe". The seal badge was checked by sealing at 0.15, reading
+> `sealed from 2023-10-19 · viewed 0×`, and retiring it again.
+
+The preview window is anchored to the symbol's **last stored bar**, not to today. Most series here
+end months ago, and a preview defaulting to "the last two weeks" would show an empty chart for every
+one of them and read as a broken download.

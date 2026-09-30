@@ -1,10 +1,13 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Loader2 } from 'lucide-react';
+import { useState } from 'react';
 
 import { DownloadForm } from '@/components/data/DownloadForm';
+import { CandlePreview } from '@/components/data/CandlePreview';
+import { CoverageTable } from '@/components/data/CoverageTable';
 import { ImportDropZone } from '@/components/data/ImportDropZone';
 import { ProviderCards } from '@/components/data/ProviderCards';
-import { listProviders, listSymbols } from '@/lib/api';
+import { fetchCoverage, listProviders, listSymbols } from '@/lib/api';
 
 /**
  * The Data page (spec 02).
@@ -16,6 +19,8 @@ export function DataPage(): React.JSX.Element {
   const queryClient = useQueryClient();
   const providers = useQuery({ queryKey: ['providers'], queryFn: listProviders });
   const symbols = useQuery({ queryKey: ['symbols'], queryFn: listSymbols });
+  const coverage = useQuery({ queryKey: ['coverage'], queryFn: fetchCoverage });
+  const [preview, setPreview] = useState<string | null>(null);
 
   /*
    * Refetch coverage AND providers after a download: the bars changed, and so did the provider's
@@ -69,6 +74,25 @@ export function DataPage(): React.JSX.Element {
           <ImportDropZone symbols={symbols.data} onImported={refreshAfterDownload} />
         )}
       </section>
+
+      <section className="space-y-2">
+        <h2 className="text-xs font-medium uppercase tracking-wide text-muted">Coverage</h2>
+        {coverage.data !== undefined && (
+          <CoverageTable rows={coverage.data} onPreview={setPreview} />
+        )}
+      </section>
+
+      {preview !== null && (
+        <section className="space-y-2">
+          <h2 className="text-xs font-medium uppercase tracking-wide text-muted">Preview</h2>
+          <CandlePreview
+            symbol={preview}
+            onClose={() => {
+              setPreview(null);
+            }}
+          />
+        </section>
+      )}
     </div>
   );
 }
