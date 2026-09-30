@@ -1981,3 +1981,20 @@ monotonicity the same way it does for a backtest, because a bar that jumps backw
 no bar.
 
 Now 31/31 against the real stack.
+
+## A50 · Optimisation shares the validation queue, concurrency 1 across both
+
+Walk-forward optimisation goes on the SAME BullMQ queue as validation rather than its own, so the
+worker's concurrency of 1 applies across both kinds.
+
+The reason is the one A49 gave for validation's concurrency: both saturate the same piscina pool. A
+validation performs about thirty engine runs and dispatches its timeframe matrix there; an
+optimisation dispatches 1,204. Running one of each at once would have them competing for the same
+threads and finishing slower than in sequence, while looking to the user like two things making
+progress. A separate queue would need its own concurrency limit and a way to coordinate with this
+one — which is a distributed semaphore reinvented to solve a problem that not creating the second
+queue does not have.
+
+The cost is that a queued optimisation blocks a quick validation behind it for minutes. That is the
+right trade for a single-user platform: the alternative is both running and neither finishing, and
+the queue position is visible.
