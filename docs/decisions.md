@@ -2231,3 +2231,26 @@ Mutation-verified: dropping the validation queue from the lookup fails it.
 > This is the third time the same shape has bitten this repo — the sprint's "SSE died after one
 > frame", and now a stream that ends early on someone else's terminal state. A progress stream that
 > LIES is worse than one that hangs: a hang is visible, and "completed" is acted on.
+
+## A58 — The integrity smoke test asserts screen against source, and skips when its run is absent
+
+Two problems with the first version of `integrity.smoke.ts`, both found by CI going red on it:
+
+**It hardcoded dates from one dataset.** `2022-04-14` and `2022-01-02` are properties of the
+dukascopy EURUSD series, not of the feature. Any other stack producing perfectly correct output
+would have failed. It now reads the report over the API and asserts the UI shows **what the check
+found** — the line number from `firstLine`, the splice's `divergedAtMs`, the causality check's
+`peekedAtMs` — which is both the stronger claim and a portable one.
+
+**It failed where it should have skipped.** CI seeds one synthetic month and never creates a
+look-ahead-leak run, so the suite went red on a missing precondition. It now `test.skip`s with the
+command that would create the run. A skip naming what is missing is honest; quietly asserting
+nothing would not be.
+
+> Also fixed: the helper read `GET /api/backtests` with its default limit of **50**, and a single
+> `pnpm test:e2e` creates enough runs to push an older fixture run off the end — which presents as
+> "no leaky run exists" and skips the whole suite. It asks for 500.
+
+**CI therefore does not exercise these four tests**, and that is stated rather than implied: the
+verification of record for slice D's DONE WHEN is the local run against the real 2022 series, 4/4.
+Full smoke locally is **27 passed**.

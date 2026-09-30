@@ -100,11 +100,11 @@ CI runs all five checks on every push — see `.github/workflows/ci.yml`.
 
 **Verified against the real docker stack:**
 
-| check             | result | covers                                                        |
-| ----------------- | ------ | ------------------------------------------------------------- |
-| `pnpm test:e2e`   | 37/37  | **slice B DONE WHEN**, and **all of slice D step 2**          |
-| `pnpm test:smoke` | 23/23  | **slice C DONE WHEN**, and slice F's browser work             |
-| `integrity.smoke` | 4/4    | **slice D DONE WHEN** — validate → verdict → evidence → chart |
+| check             | result | covers                                                                                              |
+| ----------------- | ------ | --------------------------------------------------------------------------------------------------- |
+| `pnpm test:e2e`   | 37/37  | **slice B DONE WHEN**, and **all of slice D step 2**                                                |
+| `pnpm test:smoke` | 27/27  | **slice C DONE WHEN**, and slice F's browser work                                                   |
+| `integrity.smoke` | 4/4    | **slice D DONE WHEN** — validate → verdict → evidence → chart. Skips in CI: needs a leaky run (A58) |
 
 **Slices A, B, C and D are DONE and verified.** Slice D's three steps — the validation engine, the
 API (`POST /backtests/:id/validate` + `/optimize` with SSE and cancel) and the "Integrity &
