@@ -2088,3 +2088,28 @@ the next focus clears it without a special case.
 The causality peek is the FIRST bar of the range, with no trade on it — precisely the evidence the
 trade-resolution left unclickable. `lookahead-static` correctly has no instant: it names a source
 LINE, not a bar, and reports `firstLine` instead.
+
+## A54 — The runs list had never returned a row: drizzle unparses timestamps for raw queries
+
+**Found by opening the Integrity tab's own prerequisite.** `GET /api/backtests` — listed as "done" in
+slice F and "browser-verified" — threw `TypeError: value.getTime is not a function` on **every**
+request, from `fromDbTime(r.range_from)` in `listRuns`.
+
+`drizzle-orm/node-postgres` installs its own `getTypeParser`, which returns TIMESTAMP, TIMESTAMPTZ,
+DATE and INTERVAL **unparsed** so drizzle's per-column mappers can own the conversion. A typed select
+therefore yields a `Date`; a raw `db.execute`, which has no column mappers to run, yields the ISO
+string postgres sent. `listRuns` is the repo's ONE raw query — `client.ts`'s `select 1` is the only
+other, and it reads no timestamp — so it is the only site affected, and it was wrong on every row.
+
+It compiled because the row type _declared_ `range_from: Date`. A hand-written annotation on a raw
+query is an assertion, not a check, and this one was false.
+
+**Decision: `fromDbTime` takes `DbTimestamp = Date | string`** and parses both, because the boundary
+is where the convention already says conversion lives — pushing `Date.parse` into `runs-repo` would
+put a second conversion outside `time.ts`. `listRuns`'s annotation now says `DbTimestamp`, so the
+types describe what the driver actually sends. Five tests cover both shapes, an offset that is not
+UTC, and a string that is not a timestamp at all.
+
+> Slice F's "browser-verified" was true of the _page_ and false of the _endpoint_: `shell.smoke.ts`
+> runs without a backend, so the Runs page was only ever proven against fixtures. Verified here
+> against the docker stack — the list returns all runs with their KPIs.

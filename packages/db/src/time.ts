@@ -11,10 +11,21 @@ export function toDbTime(epochMs: number): Date {
   return new Date(epochMs);
 }
 
-export function fromDbTime(value: Date): number {
-  const ms = value.getTime();
+/**
+ * What a `timestamptz` column actually arrives as.
+ *
+ * TWO shapes, not one, and which you get depends on how the row was read — this cost a working
+ * runs list (A54). drizzle's node-postgres driver installs its own `getTypeParser` that returns
+ * TIMESTAMP, TIMESTAMPTZ, DATE and INTERVAL **unparsed**, so that its per-column mappers can own
+ * the conversion. A typed select therefore yields a `Date`, while a raw `db.execute` — which has
+ * no column mappers to run — yields the ISO string postgres sent.
+ */
+export type DbTimestamp = Date | string;
+
+export function fromDbTime(value: DbTimestamp): number {
+  const ms = typeof value === 'string' ? Date.parse(value) : value.getTime();
   if (Number.isNaN(ms)) {
-    throw new RangeError('Received an Invalid Date from the database');
+    throw new RangeError(`Received an unreadable timestamp from the database: ${String(value)}`);
   }
   return ms;
 }
@@ -24,6 +35,6 @@ export function toDbTimeOrNull(epochMs: number | null | undefined): Date | null 
   return epochMs == null ? null : toDbTime(epochMs);
 }
 
-export function fromDbTimeOrNull(value: Date | null | undefined): number | null {
+export function fromDbTimeOrNull(value: DbTimestamp | null | undefined): number | null {
   return value == null ? null : fromDbTime(value);
 }

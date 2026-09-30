@@ -35,3 +35,29 @@ describe('db time boundary', () => {
     expect(fromDbTimeOrNull(new Date(1000))).toBe(1000);
   });
 });
+
+describe('the two shapes a timestamptz arrives in (A54)', () => {
+  // drizzle's node-postgres driver leaves timestamps unparsed so its own column mappers can run.
+  // Typed selects therefore hand back a Date and raw `db.execute` hands back postgres's string —
+  // and the runs list, the repo's only raw query, threw on every row until this was handled.
+  it('reads the ISO string a raw query returns', () => {
+    expect(fromDbTime('2022-01-03 00:00:00+00')).toBe(Date.UTC(2022, 0, 3));
+  });
+
+  it('reads it identically to the Date a typed select returns', () => {
+    const ms = Date.UTC(2022, 5, 30, 14, 30);
+    expect(fromDbTime(new Date(ms))).toBe(fromDbTime(new Date(ms).toISOString()));
+  });
+
+  it('keeps the offset rather than assuming the machine is UTC', () => {
+    expect(fromDbTime('2022-01-03 02:00:00+02')).toBe(Date.UTC(2022, 0, 3));
+  });
+
+  it('throws on a string that is not a timestamp at all', () => {
+    expect(() => fromDbTime('not a timestamp')).toThrow(RangeError);
+  });
+
+  it('still passes null through', () => {
+    expect(fromDbTimeOrNull(null)).toBeNull();
+  });
+});

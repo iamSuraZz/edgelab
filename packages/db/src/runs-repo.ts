@@ -21,7 +21,7 @@ import {
   encodeSamples,
   type SeriesKind,
 } from './series-codec';
-import { fromDbTime, fromDbTimeOrNull, toDbTime } from './time';
+import { fromDbTime, fromDbTimeOrNull, toDbTime, type DbTimestamp } from './time';
 
 /**
  * Persistence for strategies, versions and runs.
@@ -362,13 +362,16 @@ export async function listRuns(db: Database, limit = 50): Promise<RunSummaryRow[
     version: number;
     symbol: string;
     timeframe: string;
-    range_from: Date;
-    range_to: Date;
+    // `DbTimestamp`, not `Date`: this is the repo's one RAW query, and raw rows skip drizzle's
+    // column mappers, so these arrive as ISO strings (A54). Annotating them `Date` is what let a
+    // list endpoint that throws on every row compile and ship.
+    range_from: DbTimestamp;
+    range_to: DbTimestamp;
     state: string;
     cross_check_ok: boolean | null;
     summary: unknown;
-    created_at: Date;
-    completed_at: Date | null;
+    created_at: DbTimestamp;
+    completed_at: DbTimestamp | null;
     trade_count: string;
   }>(sql`
     select r.id,
