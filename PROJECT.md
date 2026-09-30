@@ -185,9 +185,13 @@ their context — feed, data version, engine, seal id and view count, requested 
 and `GET /backtests/:id/validations`, `/optimizations` and `GET /validations/:id` serve them so the
 tab loads past results instead of re-running. `pnpm test:e2e` is **36/36**. **Step 3 is UNDERWAY** (spec saved verbatim to `docs/spec/06b-integrity-tab.md`): the tab shell,
 the two-question verdict header (A52), check cards with "why it matters" tooltips, n/a reasons and
-clickable evidence that jumps to the Chart tab are built and compile. **Still to build: the six
-visuals, the walk-forward optimisation panel, the "Test on holdout" action — then the four DONE
-WHEN conditions, none of which has been run in a browser yet** — after which the DONE WHEN, which
+clickable evidence that jumps to the Chart tab are built and compile. The evidence jump is a TIME, not a trade (A53):
+look-ahead findings name bars that carry no trade — the causality check's first peek on the leaky
+fixture is the range's first bar — so the checks now emit `divergedAtMs`/`peekedAtMs` and the chart
+marks an instant. Verified on the leaky fixture (PF 23.17): splice diverges 2022-04-14T09:00,
+causality peeks 2022-01-02T23:00. **Still to build: the six visuals, the walk-forward optimisation
+panel, the "Test on holdout" action — then the four DONE WHEN conditions, none of which has been run
+in a browser yet** — after which the DONE WHEN, which
 requires this exercised in a browser, can be met for the first time. Each must run through `pnpm validate` on the 2022 data before the next
 starts. A24 records four constraints agreed ahead of those steps; A26 (trailing-stop replay), A30
 (regime mix in the OOS report) and A31 (spread on resting fills from the replay) are post-slice-D
