@@ -511,6 +511,100 @@ describe('the full backtest chain over HTTP', () => {
       expect(status).toBe(404);
     });
   });
+
+  describe('POST /backtests/:id/optimize', () => {
+    let optimizationId: string;
+    let optimizationJobId: string;
+
+    it('refuses an impossible spec before starting any work', async () => {
+      const { status, body } = await apiPost<ApiError>(harness, `/backtests/${runId}/optimize`, {
+        // Four inputs: a fourth dimension multiplies the run count without making the result
+        // more trustworthy, so the API refuses rather than letting it be discovered a minute in.
+        inputs: ['a', 'b', 'c', 'd'].map((name) => ({ name, min: 1, max: 3, step: 1 })),
+        objective: 'netProfit',
+        minTrades: 5,
+      });
+
+      expect(status).toBe(400);
+      expect(body.message.length).toBeGreaterThan(0);
+    });
+
+    it('reports the grid size before anything runs', async () => {
+      const { status, body } = await apiPost<{
+        validationId: string;
+        jobId: string;
+        combinations: number;
+        gridSize: number;
+      }>(harness, `/backtests/${runId}/optimize`, {
+        // Deliberately tiny: this asserts the plumbing, not the search.
+        inputs: [{ name: 'fastLen', min: 8, max: 12, step: 2 }],
+        objective: 'netProfit',
+        minTrades: 1,
+        folds: 2,
+      });
+
+      expect(status).toBe(201);
+      expect(body.combinations).toBe(3);
+      expect(body.gridSize).toBe(3);
+
+      optimizationId = body.validationId;
+      optimizationJobId = body.jobId;
+    });
+
+    it('runs to completion on the SAME queue as validation', async () => {
+      const outcome = await followJobEvents(harness, optimizationJobId);
+
+      expect(outcome.final.state, `optimization failed: ${outcome.final.error ?? ''}`).toBe(
+        'completed',
+      );
+      expect(outcome.final.percent).toBe(100);
+
+      const percents = outcome.events.map((e) => e.percent);
+      expect([...percents].sort((a, b) => a - b)).toEqual(percents);
+    }, 300_000);
+
+    it('stores the fold table, drift and stitched equity', async () => {
+      const { status, body } = await apiGet<{
+        kind: string;
+        state: string;
+        verdict: string;
+        spec: { objective: string } | null;
+        report: {
+          estimate: { totalRuns: number; threads: number };
+          result: {
+            folds: { index: number; winner: Record<string, number> | null }[];
+            drift: { name: string; values: number[] }[];
+            stitchedEquity: { foldIndex: number; cumulativeReturnPct: number }[];
+          };
+        };
+      }>(harness, `/validations/${optimizationId}`);
+
+      expect(status).toBe(200);
+      expect(body.kind).toBe('optimization');
+      expect(body.state).toBe('completed');
+
+      // The spec is stored beside the result: a fold table is meaningless without the ranges swept.
+      expect(body.spec?.objective).toBe('netProfit');
+
+      expect(body.report.estimate.totalRuns).toBeGreaterThan(0);
+      expect(body.report.result.folds.length).toBe(2);
+      expect(body.report.result.drift.some((d) => d.name === 'fastLen')).toBe(true);
+    });
+
+    it('lists optimisations separately from validations', async () => {
+      const { body: opts } = await apiGet<{ kind: string }[]>(
+        harness,
+        `/backtests/${runId}/optimizations`,
+      );
+      const { body: vals } = await apiGet<{ kind: string }[]>(
+        harness,
+        `/backtests/${runId}/validations`,
+      );
+
+      expect(opts.every((o) => o.kind === 'optimization')).toBe(true);
+      expect(vals.every((v) => v.kind === 'validation')).toBe(true);
+    });
+  });
 });
 
 describe('errors name the real reason', () => {

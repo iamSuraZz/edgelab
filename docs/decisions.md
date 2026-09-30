@@ -1998,3 +1998,27 @@ queue does not have.
 The cost is that a queued optimisation blocks a quick validation behind it for minutes. That is the
 right trade for a single-user platform: the alternative is both running and neither finishing, and
 the queue position is visible.
+
+## A51 · Step 2 complete: the optimisation endpoint
+
+`POST /backtests/:id/optimize` takes the setup form, `GET /backtests/:id/optimizations` lists past
+results, and both share `GET /validations/:id` and `DELETE /validations/:id/job` with validation —
+the two are the same resource with different `kind`, so a tab that renders one renders the other.
+
+**The spec is validated at the API boundary, not in the job.** An inverted range, a fourth input or
+a zero step is refused in milliseconds rather than after the pool has spun up; `combinations` and
+`gridSize` come back with the 201 so the caller sees the size of what it asked for before anything
+runs. The API gained a dependency on `@edgelab/validation` to do it — which is cheap, since that
+package is pure and depends only on `shared` and `metrics`, and the alternative was duplicating the
+grid arithmetic where it could drift.
+
+The job NAME is a literal in the API rather than imported from `@edgelab/worker`, for the same
+reason the queue names already are: importing it would pull piscina, pinets and every provider SDK
+into the API image.
+
+Progress is scaled to 1..99 rather than 1..100. The ETA is fitted, not exact (A35), so a bar that
+reached 100 before the work finished would be worse than one arriving slightly late.
+
+`pnpm test:e2e` is now **36/36**, covering both jobs: the grid size reported before starting, an
+impossible spec refused, monotonic progress on the shared queue, and the stored result carrying its
+fold table, parameter drift and the spec it swept.

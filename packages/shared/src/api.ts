@@ -48,6 +48,32 @@ export type ApiError = z.infer<typeof ApiErrorSchema>;
 
 /* -------------------------------------------------------------- pine/compile */
 
+/**
+ * The walk-forward optimisation setup form (A35).
+ *
+ * `name` is the input's KEY, not its title: duplicate or empty titles alias to the wrong input, and
+ * the engine overrides by key. Capped at three inputs because a fourth multiplies the run count
+ * without making the result more trustworthy, and the API refuses rather than letting the browser
+ * discover that after a minute of work.
+ */
+export const OptimizationInputSchema = z.object({
+  name: z.string().min(1),
+  min: z.number().finite(),
+  max: z.number().finite(),
+  step: z.number().finite().positive(),
+});
+
+export const OptimizationSpecSchema = z.object({
+  inputs: z.array(OptimizationInputSchema).min(1).max(3),
+  objective: z.enum(['netProfit', 'profitFactor', 'sharpe', 'expectancy']),
+  /** A set producing fewer trades than this cannot win, however good its numbers look. */
+  minTrades: z.number().int().min(1),
+  /** Above this, the grid is SAMPLED rather than truncated. */
+  maxCombinations: z.number().int().min(1).max(2_000).optional(),
+  folds: z.number().int().min(2).max(10).optional(),
+});
+export type OptimizationSpecRequest = z.infer<typeof OptimizationSpecSchema>;
+
 export const CompileRequestSchema = z.object({
   source: z.string().min(1, 'Pine source cannot be empty'),
 });

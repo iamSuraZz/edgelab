@@ -9,6 +9,11 @@ import { processBacktestJob, type BacktestJobData } from './jobs/backtest-job';
 import { CancellationWatcher } from './jobs/cancellation';
 import { JobEventPublisher } from './jobs/events';
 import { IngestCancelled, processIngestJob, type IngestJobData } from './jobs/ingest-job';
+import {
+  OPTIMIZATION_JOB,
+  processOptimizationJob,
+  type OptimizationJobData,
+} from './jobs/optimization-job';
 import { processValidationJob, type ValidationJobData } from './jobs/validation-job';
 import { TaskPool } from './pool/pool';
 import { QUEUE_NAMES, createWorker } from './queues';
@@ -80,7 +85,18 @@ export function startWorkers(env: Env, options: StartWorkersOptions = {}): Worke
   const validationWorker = createWorker(
     QUEUE_NAMES.validation,
     env.REDIS_URL,
-    (job: Job) => processValidationJob(job as Job<ValidationJobData>, { db, events, cancellation }),
+    // One queue, two job kinds (A50). Sharing the queue is what makes the concurrency of 1 apply
+    // ACROSS them rather than per kind — both saturate the same piscina pool, so one of each at
+    // once would compete for the same threads and finish slower than running them in sequence.
+    (job: Job) =>
+      job.name === OPTIMIZATION_JOB
+        ? processOptimizationJob(job as Job<OptimizationJobData>, {
+            db,
+            events,
+            cancellation,
+            databaseUrl: env.DATABASE_URL,
+          })
+        : processValidationJob(job as Job<ValidationJobData>, { db, events, cancellation }),
     { concurrency: 1 },
   );
 

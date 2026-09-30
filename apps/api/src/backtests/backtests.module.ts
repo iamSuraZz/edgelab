@@ -43,12 +43,27 @@ import {
   type EquityPoint,
   type EquitySample,
   type SeriesQuery,
+  OptimizationSpecSchema,
+  type OptimizationSpecRequest,
 } from '@edgelab/shared';
 
 import { ApiException } from '../common/api-error';
 import { ZodPipe } from '../common/zod.pipe';
 import { DB_CLIENT, REDIS_CLIENT } from '../infra/infra.module';
+import {
+  combinations as enumerateCombinations,
+  gridSize as computeGridSize,
+} from '@edgelab/validation';
+
 import { BACKTEST_QUEUE, QUEUE_NAME, VALIDATION_QUEUE } from '../infra/queues.module';
+
+/**
+ * The job NAME the worker switches on to pick the optimisation processor.
+ *
+ * A literal for the same reason the queue names are: importing it from `@edgelab/worker` would pull
+ * piscina, pinets and every provider SDK into the API image.
+ */
+const OPTIMIZATION_JOB_NAME = 'optimization';
 import { PineModule, PineService } from '../pine/pine.module';
 import { buyAndHoldCurve, downsampleEquity } from './series';
 
@@ -490,6 +505,59 @@ export class BacktestsService {
     return { validationId: id, action: 'abort-signalled' };
   }
 
+  /**
+   * Start a walk-forward optimisation.
+   *
+   * The spec is validated at this boundary rather than in the job, so an impossible setup — an
+   * inverted range, a fourth input, a zero step — is refused in milliseconds instead of after the
+   * pool has been spun up. `combinations` is computed here for the same reason: the caller gets to
+   * see the size of what it asked for before anything runs.
+   */
+  async optimize(
+    runId: string,
+    spec: OptimizationSpecRequest,
+  ): Promise<{ validationId: string; jobId: string; combinations: number; gridSize: number }> {
+    const run = await this.requireRun(runId);
+    if (run.state !== 'completed') {
+      throw ApiException.conflict(
+        `Run ${run.id} is ${run.state}. Optimisation needs a completed run to optimise against.`,
+      );
+    }
+
+    const { folds, ...optimizationSpec } = spec;
+
+    let combinations: number;
+    let gridSize: number;
+    try {
+      combinations = enumerateCombinations(optimizationSpec).length;
+      gridSize = computeGridSize(optimizationSpec);
+    } catch (error: unknown) {
+      throw ApiException.validation(error instanceof Error ? error.message : String(error));
+    }
+
+    const validationId = await createValidation(this.db, {
+      runId: run.id,
+      kind: 'optimization',
+      spec,
+    });
+
+    // Same queue as validation, concurrency 1 across both (A50).
+    const job = await this.validationQueue.add(OPTIMIZATION_JOB_NAME, {
+      validationId,
+      runId: run.id,
+      spec: optimizationSpec,
+      ...(folds === undefined ? {} : { folds }),
+    });
+
+    return { validationId, jobId: String(job.id), combinations, gridSize };
+  }
+
+  /** Past optimisations for a run, newest first. */
+  async optimizations(runId: string): Promise<unknown> {
+    await this.requireRun(runId);
+    return listValidations(this.db, runId, 'optimization');
+  }
+
   private async requireRun(runId: string): Promise<RunDetailRow> {
     const run = await readRun(this.db.db, runId);
     if (run === null) throw ApiException.notFound(`No backtest run with id ${runId}.`);
@@ -542,6 +610,19 @@ export class BacktestsController {
   @Get(':id/validations')
   validations(@Param('id') id: string): Promise<unknown> {
     return this.backtests.validations(id);
+  }
+
+  @Post(':id/optimize')
+  optimize(
+    @Param('id') id: string,
+    @Body(new ZodPipe(OptimizationSpecSchema)) body: OptimizationSpecRequest,
+  ): Promise<unknown> {
+    return this.backtests.optimize(id, body);
+  }
+
+  @Get(':id/optimizations')
+  optimizations(@Param('id') id: string): Promise<unknown> {
+    return this.backtests.optimizations(id);
   }
 
   @Delete(':id/job')
