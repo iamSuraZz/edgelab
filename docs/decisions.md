@@ -2038,8 +2038,8 @@ pass/warn/fail/n·a and deliberately no combined score.
 A lone "Pass" badge on a losing strategy reads as an endorsement. The checks are saying "we found no
 lying"; a reader sees "approved". Splitting the questions makes the first badge mean exactly what it
 measures, and leaves the second as a list that has to be read. The passing headline says so
-explicitly: *"no look-ahead, and execution is modelled realistically. This says nothing about whether
-the strategy is any good."*
+explicitly: _"no look-ahead, and execution is modelled realistically. This says nothing about whether
+the strategy is any good."_
 
 **No combined robustness score, on purpose.** There is no honest way to average "profitable in 2 of 4
 timeframes" against "15% of bootstrap resamples lose money", and any weighting invented to do it
@@ -2079,3 +2079,12 @@ made is "here, at this time", and there is no price associated with a look-ahead
 drawing one would invent a claim the evidence does not make. Lightweight Charts has no vertical-line
 primitive, so it is a two-point series registered in the same ref the trade lines use — which means
 the next focus clears it without a special case.
+
+**Verified on the leaky fixture** (EURUSD H1 2022 H1, PF 23.17):
+
+    lookahead-future-splice   fail   divergedAtMs = 2022-04-14T09:00
+    lookahead-causality       fail   peekedAtMs   = 2022-01-02T23:00
+
+The causality peek is the FIRST bar of the range, with no trade on it — precisely the evidence the
+trade-resolution left unclickable. `lookahead-static` correctly has no instant: it names a source
+LINE, not a bar, and reports `firstLine` instead.
