@@ -385,6 +385,25 @@ async function runOne(params: RunOneParams): Promise<boolean> {
       winRatePct: run.metrics.trades.all.winRatePct,
       closedTrades: run.metrics.trades.all.trades,
       buyAndHoldReturnPct: run.buyAndHoldReturnPct,
+      /*
+       * The FULL report, like the queued job stores (A65).
+       *
+       * Omitting it made every CLI-created run a second-class citizen in the UI: `GET
+       * /backtests/:id` returns `metrics: null`, so the report page showed no monthly heatmap, no
+       * cost waterfall and no metric tables — while the CLI printed those very figures to the
+       * terminal as it saved the run. The CLI is the primary tool in this project, so its runs have
+       * to be as readable as the API's.
+       */
+      report: run.metrics,
+      diagnostics: run.engineResult.diagnostics,
+      // Same derivation the queued job uses: entry orders placed and never filled, which is
+      // almost always a margin rejection and only meaningful when nothing traded at all.
+      unfilledEntryOrders:
+        run.engineResult.trades.length === 0
+          ? run.engineResult.orderLog.filter(
+              (r) => r.outcome === 'placed' && (r.method === 'entry' || r.method === 'order'),
+            ).length
+          : 0,
     };
 
     await completeRun(db.db, {

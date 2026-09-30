@@ -8,7 +8,9 @@ import { EM_DASH, formatCurrency, formatPercent, formatRatio, pnlClass } from '@
 import { cn } from '@/lib/utils';
 import { useStudio } from '@/stores/studio';
 import { EquityChart } from './EquityChart';
+import { CostWaterfall } from './CostWaterfall';
 import { MetricTable, type MetricRowSpec } from './MetricTable';
+import { MonthlyHeatmap } from './MonthlyHeatmap';
 import { PriceChart } from './PriceChart';
 import { TradesTable } from './TradesTable';
 import { IntegrityTab } from './integrity/IntegrityTab';
@@ -185,12 +187,29 @@ export function ResultsPane({
           chart under about 20rem is not usable.
         */}
         {tab === 'Overview' && (
-          <div className="h-full min-h-80 p-2">
-            {series.data === undefined ? (
-              <Loading />
-            ) : (
-              <EquityChart series={series.data} currency={currency} />
-            )}
+          <div className="space-y-3 p-2">
+            {/* Fixed height for the chart, then the heatmap below it: spec 05 asks for both on
+                Overview, and a chart sized to fill the pane would push the grid off-screen. */}
+            <div className="relative h-80 min-h-80">
+              {series.data === undefined ? (
+                <Loading />
+              ) : (
+                <EquityChart series={series.data} currency={currency} />
+              )}
+            </div>
+
+            <section className="space-y-1.5">
+              <h3 className="text-xs font-medium uppercase tracking-wide text-muted">
+                Monthly returns
+              </h3>
+              {detail.metrics === null ? (
+                <p className="text-xs text-muted">
+                  This run has no stored metrics report, so its monthly breakdown is unavailable.
+                </p>
+              ) : (
+                <MonthlyHeatmap months={detail.metrics.monthlyReturns} />
+              )}
+            </section>
           </div>
         )}
 
@@ -215,9 +234,26 @@ export function ResultsPane({
         {tab === 'Trade stats' && <TradeStatsTables detail={detail} currency={currency} />}
 
         {tab === 'Costs' && (
-          <MetricsSection>
+          <div className="space-y-4 p-2">
+            {detail.metrics === null ? (
+              <p className="text-xs text-muted">
+                This run has no stored metrics report, so its cost breakdown is unavailable.
+              </p>
+            ) : (
+              <section className="space-y-2">
+                <h3 className="text-xs font-medium uppercase tracking-wide text-muted">
+                  Gross to net
+                </h3>
+                <CostWaterfall
+                  costs={detail.metrics.costs}
+                  netProfit={detail.kpis.netProfit ?? 0}
+                  currency={currency}
+                />
+              </section>
+            )}
+
             <MetricTable title="Slippage & cost drag" currency={currency} rows={costRows(detail)} />
-          </MetricsSection>
+          </div>
         )}
 
         {tab === 'Chart' && (

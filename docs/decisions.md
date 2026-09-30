@@ -2455,3 +2455,42 @@ Scaling to the local maximum paints a uniformly thin series as though it were co
 The preview window is anchored to the symbol's **last stored bar**, not to today. Most series here
 end months ago, and a preview defaulting to "the last two weeks" would show an empty chart for every
 one of them and read as a broken download.
+
+## A65 — The monthly heatmap and the cost waterfall, and what the waterfall does NOT claim
+
+Spec 05's Overview asked for a monthly returns heatmap beside the equity curve, and its cost tab for
+a waterfall from gross to net. Both were missing; the tab was a metric table.
+
+**The heatmap compounds each year's months rather than summing them.** Monthly returns are ratios of
+their own starting equity, so adding them overstates a winning year and understates a losing one —
+the same error A36 found in the ratio checks. Colour is scaled to the run's own largest month and
+the legend says so, because a relative scale that reads as absolute is worse than no colour.
+`returnPct` is nullable and is rendered as an em dash, never 0: a month whose starting equity was
+zero has no defined return, and painting that as flat would hide a hole in the record.
+
+### The waterfall stopped asserting something that could not fail
+
+The first version showed the refund as its own credit line and claimed
+`gross − costs = net ✓`. Both were wrong, and the run that proved it is the one A29 was written
+about — `atr-bracket` with `slippagePoints: 15`, **$318.77 refunded**:
+
+- the running total landed on **−$8,848.48** against a net of **−$9,167.25**, out by exactly the
+  refund. `slippage.total` is ALREADY net of it, because the refund is a correction applied before
+  net P&L rather than a cost charged and returned. The refund now annotates the slippage row;
+- the balance badge was **tautological**. `grossBeforeCosts` is computed upstream as
+  `netProfit + totalCosts`, so that identity holds by construction and a badge asserting it proves
+  nothing. It now checks whether the rows DRAWN sum to `totalCosts` — which fails if a cost category
+  is added upstream without a row here, and that is a defect worth catching.
+
+> A check that cannot fail is worse than no check: it reads as verification. This one was written
+> with a comment claiming it guarded against A27 and A28 — the two occasions the waterfall charged a
+> cost nobody took — while being incapable of detecting either.
+
+**CLI-created runs stored no metrics report (A65).** `summary` omitted `report`, so
+`GET /backtests/:id` returned `metrics: null` and the report page showed no heatmap, no waterfall and
+no metric tables for them — while the CLI printed those same figures to the terminal as it saved the
+run. The CLI is the primary tool in this project; its runs are now as readable as the API's.
+
+> **Verified in the browser** on both: a run with no slippage (rows account for every counted cost,
+> refund note absent) and the `atr-bracket` run above, whose running total now lands exactly on
+> −$9,167.25 with the refund shown on the slippage row.
