@@ -2199,3 +2199,35 @@ suite's three `n/a`s are the same guard in three places — cost stress has no b
 because the run is unprofitable at 0x costs, and neither OOS check has a profitable in-sample half.
 **A strategy with nothing to overfit is the one case where these checks must say so instead of
 scoring it**, and on the acceptance data they do.
+
+## A57 — A job could be told it had finished when it was still queued
+
+`pnpm test:e2e` was flaking on the two optimisation tests, about one run in two. The failing
+assertion was `expected 97 to be 100`, and the test returned in **17ms** — it had not waited for
+anything. 97 is not a number the optimisation progress can produce (8 runs scale to 86 or 98); it is
+the timeframe-matrix step of a **validation**. The client had been handed a different job's state.
+
+Two defects, each hiding the other:
+
+1. **`JobsService` never knew about the validation queue.** It was added in step 2 and the SSE
+   lookup was not updated, so a validation or optimisation job that had not yet published an event —
+   one sitting behind another at concurrency 1 (A50) — could not be found.
+2. **`jobStateKey` and `jobEventChannel` are namespaced by job id alone**, and BullMQ numbers jobs
+   from 1 _within each queue_. `backtest` job 7, `ingest` job 7 and `validation` job 7 share one
+   Redis key and one channel.
+
+Together: the unfound validation job fell through to the queue scan, matched the _backtest_ job of
+the same number, and was answered with that job's state — which was terminal, so the API sent `end`
+and closed the stream. **The client was told a job had finished while it was still in the queue.**
+
+**Decision: fix both.** Job ids are now `randomUUID()` at all four `add()` sites, and the validation
+queue is in the lookup. Either fix alone leaves a hole — unique ids without the queue turn the
+collision into an honest 404, and the queue without unique ids leaves the key still shared with
+whatever else numbered a job the same.
+
+Guarded by an e2e that asserts **every frame names its own queue**, not merely that a stream opened.
+Mutation-verified: dropping the validation queue from the lookup fails it.
+
+> This is the third time the same shape has bitten this repo — the sprint's "SSE died after one
+> frame", and now a stream that ends early on someone else's terminal state. A progress stream that
+> LIES is worse than one that hangs: a hang is visible, and "completed" is acted on.

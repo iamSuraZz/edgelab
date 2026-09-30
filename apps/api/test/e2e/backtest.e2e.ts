@@ -604,6 +604,34 @@ describe('the full backtest chain over HTTP', () => {
       expect(opts.every((o) => o.kind === 'optimization')).toBe(true);
       expect(vals.every((v) => v.kind === 'validation')).toBe(true);
     });
+
+    /**
+     * A job is streamable the instant it is enqueued, before it has published anything (A57).
+     *
+     * This is the case that broke: an optimisation queued behind a validation at concurrency 1 has
+     * written no state event, so the API must synthesise `queued` from the queue itself — and the
+     * validation queue was missing from that lookup. The symptom depended on the job id. With
+     * BullMQ's per-queue counter it collided with a backtest job and the client was served THAT
+     * job's terminal state; with unique ids it was an honest 404. Either way the client was told
+     * something untrue about a job that was sitting in the queue, alive.
+     */
+    it('streams a job under its OWN queue, not a same-numbered job elsewhere', async () => {
+      const { status, body } = await apiPost<{ validationId: string; jobId: string }>(
+        harness,
+        `/backtests/${runId}/validate`,
+        {},
+      );
+      expect(status).toBe(201);
+
+      // Throws "SSE stream returned 404" if the queue is missing from the lookup at all.
+      const outcome = await followJobEvents(harness, body.jobId);
+
+      // The assertion with teeth: every frame must be about THIS queue. When the id was a
+      // per-queue counter and validation was absent from the lookup, the opening frame was a
+      // backtest job's — same number, different job, and terminal, so the stream closed at once.
+      expect(outcome.events.every((e) => e.queue === 'validation')).toBe(true);
+      expect(outcome.final.state).toBe('completed');
+    }, 300_000);
   });
 });
 

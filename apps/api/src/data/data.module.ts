@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -18,6 +17,8 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { randomUUID } from 'node:crypto';
+
 import type { Queue } from 'bullmq';
 import {
   blockedNotice,
@@ -187,13 +188,18 @@ export class DataService {
       );
     }
 
-    const job = await this.ingestQueue.add(QUEUE_NAME.ingest, {
-      symbolCode: symbol.symbol,
-      provider: body.provider,
-      fromMs: body.from,
-      toMs: body.to,
-      force: body.force,
-    });
+    // A unique id, not BullMQ's per-queue counter — see `newJobId` in backtests.module.ts (A57).
+    const job = await this.ingestQueue.add(
+      QUEUE_NAME.ingest,
+      {
+        symbolCode: symbol.symbol,
+        provider: body.provider,
+        fromMs: body.from,
+        toMs: body.to,
+        force: body.force,
+      },
+      { jobId: randomUUID() },
+    );
 
     const jobId = String(job.id);
     return { jobId, queue: QUEUE_NAME.ingest, eventsUrl: `/api/jobs/${jobId}/events` };

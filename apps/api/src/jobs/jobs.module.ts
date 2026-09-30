@@ -9,6 +9,7 @@ import { ApiException } from '../common/api-error';
 import {
   BACKTEST_QUEUE,
   INGEST_QUEUE,
+  VALIDATION_QUEUE,
   REDIS_SUBSCRIBER_FACTORY,
   type RedisSubscriberFactory,
 } from '../infra/queues.module';
@@ -35,6 +36,7 @@ export class JobsService {
     @Inject(REDIS_SUBSCRIBER_FACTORY) private readonly subscriberFor: RedisSubscriberFactory,
     @Inject(BACKTEST_QUEUE) private readonly backtestQueue: Queue,
     @Inject(INGEST_QUEUE) private readonly ingestQueue: Queue,
+    @Inject(VALIDATION_QUEUE) private readonly validationQueue: Queue,
   ) {}
 
   /** The last event the worker published, or a synthesised one from the queue's own state. */
@@ -48,9 +50,19 @@ export class JobsService {
     // No published state yet: the job exists but has not been picked up. Synthesising `queued`
     // from the queue means a client subscribing immediately after POST still gets a first frame
     // rather than silence.
+    /*
+     * EVERY queue, including validation (A57).
+     *
+     * It was missing here from the day step 2 added it, and the omission hid behind BullMQ's
+     * per-queue job ids: a validation job numbered 7 was "found" as backtest job 7 and answered
+     * with that job's state. With unique ids the same gap surfaces honestly as a 404, which is why
+     * both fixes belong together — either alone leaves a job that reports someone else's progress
+     * or none at all.
+     */
     for (const [queue, name] of [
       [this.backtestQueue, 'backtest'],
       [this.ingestQueue, 'ingest'],
+      [this.validationQueue, 'validation'],
     ] as const) {
       const job = await queue.getJob(jobId);
       if (job === undefined) continue;

@@ -10,6 +10,8 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
+
 import type { Queue } from 'bullmq';
 import type { Redis } from 'ioredis';
 
@@ -64,6 +66,19 @@ import { BACKTEST_QUEUE, QUEUE_NAME, VALIDATION_QUEUE } from '../infra/queues.mo
  * piscina, pinets and every provider SDK into the API image.
  */
 const OPTIMIZATION_JOB_NAME = 'optimization';
+
+/**
+ * A globally unique job id, rather than BullMQ's per-queue counter (A57).
+ *
+ * `jobStateKey` and `jobEventChannel` are namespaced by job id ALONE, and BullMQ numbers jobs from
+ * 1 within each queue — so `backtest` job 7, `ingest` job 7 and `validation` job 7 all share one
+ * Redis key and one pub/sub channel. That let the API hand a client another queue's TERMINAL state
+ * as its own opening frame, closing the stream and reporting a still-running job as finished.
+ */
+function newJobId(): string {
+  return randomUUID();
+}
+
 import { PineModule, PineService } from '../pine/pine.module';
 import { buyAndHoldCurve, downsampleEquity } from './series';
 
@@ -137,21 +152,25 @@ export class BacktestsService {
       state: 'queued',
     });
 
-    const job = await this.queue.add(QUEUE_NAME.backtest, {
-      runId,
-      source,
-      symbolCode: symbol.symbol,
-      timeframe: body.timeframe,
-      fromMs: body.from,
-      toMs: body.to,
-      initialCapital: body.initialCapital,
-      accountCurrency: body.accountCurrency.toUpperCase(),
-      costs: body.costs,
-      inputs: body.inputs,
-      props,
-      warmupBars: body.warmupBars,
-      rfAnnual: body.rfAnnual,
-    });
+    const job = await this.queue.add(
+      QUEUE_NAME.backtest,
+      {
+        runId,
+        source,
+        symbolCode: symbol.symbol,
+        timeframe: body.timeframe,
+        fromMs: body.from,
+        toMs: body.to,
+        initialCapital: body.initialCapital,
+        accountCurrency: body.accountCurrency.toUpperCase(),
+        costs: body.costs,
+        inputs: body.inputs,
+        props,
+        warmupBars: body.warmupBars,
+        rfAnnual: body.rfAnnual,
+      },
+      { jobId: newJobId() },
+    );
 
     const jobId = String(job.id);
     await setRunJobId(this.db.db, runId, jobId);
@@ -469,10 +488,11 @@ export class BacktestsService {
     }
 
     const validationId = await createValidation(this.db, { runId: run.id, kind: 'validation' });
-    const job = await this.validationQueue.add(QUEUE_NAME.validation, {
-      validationId,
-      runId: run.id,
-    });
+    const job = await this.validationQueue.add(
+      QUEUE_NAME.validation,
+      { validationId, runId: run.id },
+      { jobId: newJobId() },
+    );
 
     return { validationId, jobId: String(job.id) };
   }
@@ -542,12 +562,16 @@ export class BacktestsService {
     });
 
     // Same queue as validation, concurrency 1 across both (A50).
-    const job = await this.validationQueue.add(OPTIMIZATION_JOB_NAME, {
-      validationId,
-      runId: run.id,
-      spec: optimizationSpec,
-      ...(folds === undefined ? {} : { folds }),
-    });
+    const job = await this.validationQueue.add(
+      OPTIMIZATION_JOB_NAME,
+      {
+        validationId,
+        runId: run.id,
+        spec: optimizationSpec,
+        ...(folds === undefined ? {} : { folds }),
+      },
+      { jobId: newJobId() },
+    );
 
     return { validationId, jobId: String(job.id), combinations, gridSize };
   }
