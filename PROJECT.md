@@ -372,28 +372,28 @@ The leak is caught at the first cutoff on trade 97 — `exitBar` 468 on the real
 following week was replaced. That prefix invariance passes the same run 6 of 6 is the argument for
 keeping both layers: truncation covers unbounded leaks, splicing covers bounded ones.
 
-| Piece                                                      | State                         |
-| ---------------------------------------------------------- | ----------------------------- |
-| `security-log.ts` seam                                     | done, **wired to nothing**    |
-| `lookahead.ts` causality (A1a)                             | done, 14 tests, **unwired**   |
-| `static-lint.ts` — tokenizer, line numbers                 | done, 18 tests                |
-| `prefix-invariance.ts` — cutoffs + margin (A1)             | done, 16 tests                |
-| `same-bar.ts` estimate (A5)                                | done, 13 tests                |
-| `price-basis.ts` (A19) — one derivation, three consumers   | done, 16 tests                |
-| `per-fill.ts` (A21) — pips/ticks + gap breakdown           | done, 11 tests                |
-| A2 statuses `pass/warn/fail/n·a` + Inconclusive verdict    | done                          |
-| `validateRun` + `pnpm validate <runId>`                    | done, run on the real stack   |
-| **Future-splice (A1b)** — the layer that catches the leak  | done, 15 tests, verified      |
-| Fill audit + **bid/ask asymmetry (A20)**                   | done, verified on real data   |
-| **M1 intrabar replay (A22)** — missed stops + phantoms     | done, 14 tests, verified      |
-| Cost stress (A27)                                          | done, verified on real data   |
-| OOS split, walk-forward, sealed holdout                    | **not started**               |
-| Timeframe matrix, regimes, Monte Carlo                     | **not started**               |
-| `POST /backtests/:id/validate` + SSE (step 2)              | **done, e2e 31/31**           |
-| `POST /backtests/:id/optimize` + SSE (step 2)              | **done, e2e 36/36**           |
-| Integrity tab: header, cards, evidence jump (step 3)       | built, **not browser-tested** |
-| Integrity tab: visuals, optimisation panel, holdout action | **not started**               |
-| "Integrity & Overfitting" tab (step 3)                     | **not started**               |
+| Piece                                                      | State                       |
+| ---------------------------------------------------------- | --------------------------- |
+| `security-log.ts` seam                                     | done, **wired to nothing**  |
+| `lookahead.ts` causality (A1a)                             | done, 14 tests, **unwired** |
+| `static-lint.ts` — tokenizer, line numbers                 | done, 18 tests              |
+| `prefix-invariance.ts` — cutoffs + margin (A1)             | done, 16 tests              |
+| `same-bar.ts` estimate (A5)                                | done, 13 tests              |
+| `price-basis.ts` (A19) — one derivation, three consumers   | done, 16 tests              |
+| `per-fill.ts` (A21) — pips/ticks + gap breakdown           | done, 11 tests              |
+| A2 statuses `pass/warn/fail/n·a` + Inconclusive verdict    | done                        |
+| `validateRun` + `pnpm validate <runId>`                    | done, run on the real stack |
+| **Future-splice (A1b)** — the layer that catches the leak  | done, 15 tests, verified    |
+| Fill audit + **bid/ask asymmetry (A20)**                   | done, verified on real data |
+| **M1 intrabar replay (A22)** — missed stops + phantoms     | done, 14 tests, verified    |
+| Cost stress (A27)                                          | done, verified on real data |
+| OOS split, walk-forward, sealed holdout                    | done, verified              |
+| Timeframe matrix, regimes, Monte Carlo                     | done, verified              |
+| `POST /backtests/:id/validate` + SSE (step 2)              | done, e2e 37/37             |
+| `POST /backtests/:id/optimize` + SSE (step 2)              | done, e2e 37/37             |
+| Integrity tab: header, cards, evidence jump (step 3)       | done, browser-verified      |
+| Integrity tab: visuals, optimisation panel, holdout action | done, browser-verified      |
+| "Integrity & Overfitting" tab (step 3)                     | **DONE — 4/4 in a browser** |
 
 | Phase              | Core           | API                  | UI                   |
 | ------------------ | -------------- | -------------------- | -------------------- |
