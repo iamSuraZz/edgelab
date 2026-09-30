@@ -2388,3 +2388,38 @@ exists to prevent.
 > **Verified in the browser** (spec 02's DONE WHEN, and this session's): EURUSD 2024-02-05 ..
 > 2024-02-12 from Dukascopy, progress visible from 1%, **7,187 bars** stored, coverage moving from
 > 2024-01-31 to 2024-02-11 without a reload.
+
+## A63 — MT5 and generic CSV share one parser, and the drop-zone offers only what exists
+
+The generic CSV importer was refused at the endpoint ("not wired to this endpoint yet"). It is now
+the SAME parser as the MT5 one, because that parser already detects columns by ALIAS rather than by
+position and already reads `YYYY.MM.DD`, `YYYY-MM-DD` and ISO stamps, with time, volume and spread
+all optional. What it lacked was broader date aliases:
+
+    DATE_ALIASES = ['DATE', 'DATETIME', 'TIMESTAMP', 'TIME']
+
+DATE stays first so MT5 files match exactly as before. One trap needed handling: a file whose only
+stamp column is called `TIME` matched as both date AND time, and the reader would have concatenated
+the column with itself. When both resolve to the same column, the time index becomes `-1` — "the
+date cell is the whole stamp", which is what it is.
+
+A second implementation would have drifted from this one within a month. The error message stopped
+saying "not an MT5 bar export", since a generic file is now a first-class input.
+
+**The source label is the format**, so `mt5-csv` and `generic-csv` are distinguishable in coverage.
+Labelling a generic import as an MT5 export would misreport where a series came from.
+
+**Exness tick ZIPs are not offered in the UI.** The importer exists and the endpoint accepts them,
+but no export has ever reached this project (A12), and an option nobody can exercise is a claim the
+interface cannot keep.
+
+> **Verified in the browser**, both formats into GBPUSD, then deleted:
+>
+> | format      | file                  | stored                                       |
+> | ----------- | --------------------- | -------------------------------------------- |
+> | mt5-csv     | tab-separated, UTC+2  | first bar `02:00` broker → **`00:00:00+00`** |
+> | generic-csv | comma, one ISO column | first bar `00:00` → **`00:00:00+00`**        |
+>
+> The offset is the assertion that matters: MT5 writes the broker's wall clock with nothing in the
+> file naming the zone, so importing a GMT+2 export as UTC shifts every bar two hours in a way
+> nothing downstream can detect. 600 rows each, both labelled with their own source.

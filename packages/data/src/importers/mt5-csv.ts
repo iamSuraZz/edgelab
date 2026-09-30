@@ -26,7 +26,15 @@ import {
  *  - <SPREAD> is in POINTS, so it is multiplied by the symbol's mintick to reach a price.
  */
 
-const DATE_ALIASES = ['DATE'];
+/*
+ * DATE first, then the single-column spellings (A63).
+ *
+ * MT5 exports split the stamp across `<DATE>` and `<TIME>`; almost everything else writes one
+ * column. Listing DATE first keeps MT5 files matching exactly as before, and the fallbacks let a
+ * generic export through without a second parser — the row reader already accepts
+ * `YYYY-MM-DD HH:MM:SS`, `YYYY.MM.DD` and the ISO `T` separator.
+ */
+const DATE_ALIASES = ['DATE', 'DATETIME', 'TIMESTAMP', 'TIME'];
 const TIME_ALIASES = ['TIME'];
 const OPEN_ALIASES = ['OPEN'];
 const HIGH_ALIASES = ['HIGH'];
@@ -80,21 +88,30 @@ export function detectMt5Columns(header: readonly string[]): Mt5ColumnMap {
     spread: findColumn(header, SPREAD_ALIASES),
   };
 
+  /*
+   * One column matched as BOTH date and time — a file whose only stamp column is called `TIME`.
+   * Left alone, the reader would concatenate it with itself. `-1` means "the date cell is the whole
+   * stamp", which is exactly what it is.
+   */
+  const resolved: Mt5ColumnMap =
+    map.date !== -1 && map.date === map.time ? { ...map, time: -1 } : map;
+
   const missing: string[] = [];
-  if (map.date === -1) missing.push('<DATE>');
-  if (map.open === -1) missing.push('<OPEN>');
-  if (map.high === -1) missing.push('<HIGH>');
-  if (map.low === -1) missing.push('<LOW>');
-  if (map.close === -1) missing.push('<CLOSE>');
+  if (resolved.date === -1) missing.push('<DATE>');
+  if (resolved.open === -1) missing.push('<OPEN>');
+  if (resolved.high === -1) missing.push('<HIGH>');
+  if (resolved.low === -1) missing.push('<LOW>');
+  if (resolved.close === -1) missing.push('<CLOSE>');
 
   if (missing.length > 0) {
     throw new ImportFormatError(
-      `Not an MT5 bar export: missing ${missing.join(', ')}. ` +
+      `Not a bar file: missing ${missing.join(', ')}. A date or datetime column plus open, high, ` +
+        `low and close are required; time, volume and spread are optional. ` +
         `Found columns: ${header.join(', ')}`,
     );
   }
 
-  return map;
+  return resolved;
 }
 
 /**

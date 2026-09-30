@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Loader2 } from 'lucide-react';
 
 import { DownloadForm } from '@/components/data/DownloadForm';
+import { ImportDropZone } from '@/components/data/ImportDropZone';
 import { ProviderCards } from '@/components/data/ProviderCards';
 import { listProviders, listSymbols } from '@/lib/api';
 
@@ -59,6 +60,13 @@ export function DataPage(): React.JSX.Element {
             symbols={symbols.data}
             onFinished={refreshAfterDownload}
           />
+        )}
+      </section>
+
+      <section className="space-y-2">
+        <h2 className="text-xs font-medium uppercase tracking-wide text-muted">Import a file</h2>
+        {symbols.data !== undefined && (
+          <ImportDropZone symbols={symbols.data} onImported={refreshAfterDownload} />
         )}
       </section>
     </div>

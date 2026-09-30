@@ -328,13 +328,6 @@ export class DataService {
   ): Promise<{ symbol: string; rows: number; inserted: number; duplicates: number }> {
     const symbol = await this.requireSymbol(body.symbol);
 
-    if (body.format === 'generic-csv') {
-      throw ApiException.unsupported(
-        'The generic CSV importer is not wired to this endpoint yet. Use --format mt5-csv, ' +
-          'or `pnpm run import:file` for other layouts.',
-      );
-    }
-
     const dir = await mkdtemp(path.join(tmpdir(), 'edgelab-import-'));
     const filePath = path.join(dir, path.basename(file.originalname) || `upload-${randomUUID()}`);
 
@@ -347,7 +340,9 @@ export class DataService {
       const store = async (bars: Parameters<typeof copyBarsIgnoreDuplicates>[1]['bars']) => {
         const result = await copyBarsIgnoreDuplicates(this.db, {
           symbolId: symbol.id,
-          source: body.format === 'mt5-csv' ? 'mt5-csv' : 'exness-ticks',
+          // The SOURCE is the format, so coverage shows where a series came from. A generic import
+          // is not an MT5 export and labelling it one would misreport the provenance.
+          source: body.format,
           bars,
         });
         inserted += result.inserted;
@@ -357,9 +352,20 @@ export class DataService {
       // The two importers report different stat shapes — MT5 counts CSV rows, Exness counts
       // ticks — so the response reports whichever the format produced rather than inventing a
       // common field that would mean different things.
+      /*
+       * MT5 and generic CSV share ONE parser (A63).
+       *
+       * It detects columns by alias rather than by position and already reads `YYYY.MM.DD`,
+       * `YYYY-MM-DD` and ISO stamps, with time, volume and spread all optional — so a generic
+       * export needs broader aliases, not a second implementation that would drift from this one.
+       *
+       * Exness ZIPs stay on their own path and remain NOT PLANNED as a workflow (A12); the
+       * primitive is here if an export ever arrives.
+       */
       const rows =
-        body.format === 'mt5-csv'
-          ? (
+        body.format === 'exness-ticks'
+          ? (await streamExnessZip(filePath, {}, store)).ticks
+          : (
               await streamMt5Csv(
                 filePath,
                 {
@@ -368,8 +374,7 @@ export class DataService {
                 },
                 store,
               )
-            ).rows
-          : (await streamExnessZip(filePath, {}, store)).ticks;
+            ).rows;
 
       if (inserted > 0) await bumpDataVersion(this.db, symbol.id);
 

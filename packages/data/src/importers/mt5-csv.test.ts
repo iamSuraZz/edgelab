@@ -162,3 +162,43 @@ describe('parseMt5CsvText', () => {
     expect(parseMt5CsvText('\n\n', UTC).bars).toEqual([]);
   });
 });
+
+describe('generic bar files, not just MT5 exports (A63)', () => {
+  // The importer is alias-driven rather than positional, so a file that names its columns
+  // sensibly should not need a second parser.
+  it('accepts a single DATETIME column', () => {
+    const map = detectMt5Columns(['DATETIME', 'OPEN', 'HIGH', 'LOW', 'CLOSE']);
+    expect(map.date).toBe(0);
+    // -1 means the date cell carries the whole stamp.
+    expect(map.time).toBe(-1);
+  });
+
+  it('accepts TIMESTAMP as the stamp column', () => {
+    expect(detectMt5Columns(['TIMESTAMP', 'OPEN', 'HIGH', 'LOW', 'CLOSE']).date).toBe(0);
+  });
+
+  it('does not concatenate a lone TIME column with itself', () => {
+    // Without the fix, date and time both resolve to column 0 and the reader builds
+    // "2024-01-02 10:00 2024-01-02 10:00".
+    const map = detectMt5Columns(['TIME', 'OPEN', 'HIGH', 'LOW', 'CLOSE']);
+    expect(map.date).toBe(0);
+    expect(map.time).toBe(-1);
+  });
+
+  it('still prefers a real DATE column when an MT5 file has both', () => {
+    const map = detectMt5Columns(['<DATE>', '<TIME>', '<OPEN>', '<HIGH>', '<LOW>', '<CLOSE>']);
+    expect(map.date).toBe(0);
+    expect(map.time).toBe(1);
+  });
+
+  it('parses an ISO stamp from a generic file', () => {
+    expect(parseMt5Timestamp('2024-01-02T10:30:00', undefined, 0)).toBe(
+      Date.UTC(2024, 0, 2, 10, 30),
+    );
+  });
+
+  it('names what is missing rather than calling it "not an MT5 export"', () => {
+    // A generic file is a first-class input now, so the message cannot assume a format.
+    expect(() => detectMt5Columns(['DATETIME', 'OPEN', 'HIGH'])).toThrow(/<LOW>, <CLOSE>/);
+  });
+});
