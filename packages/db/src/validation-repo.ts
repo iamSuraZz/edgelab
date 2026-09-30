@@ -16,7 +16,14 @@ import { fromDbTime, toDbTime } from './time';
  * at that moment, and whether a seal truncated the range.
  */
 
-export type ValidationKind = 'validation' | 'optimization';
+/**
+ * `holdout` is a THIRD kind, not a validation with a flag.
+ *
+ * It costs something no other kind does — a look at sealed data, recorded permanently (A59) — so it
+ * is listed and filtered separately. Folding it into `validation` would bury the one result in this
+ * system you cannot re-run for free among the ones you can.
+ */
+export type ValidationKind = 'validation' | 'optimization' | 'holdout';
 export type ValidationState = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
 
 export interface ValidationContext {

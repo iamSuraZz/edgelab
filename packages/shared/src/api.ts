@@ -74,6 +74,18 @@ export const OptimizationSpecSchema = z.object({
 });
 export type OptimizationSpecRequest = z.infer<typeof OptimizationSpecSchema>;
 
+/**
+ * Which check to run against the sealed holdout.
+ *
+ * Required and explicit, with no default, because this request spends something: a body that could
+ * be empty would let a mis-wired client burn a holdout by accident. Naming the check is the
+ * caller's acknowledgement of what they are asking for (A59).
+ */
+export const HoldoutTestRequestSchema = z.object({
+  checkId: z.string().min(1),
+});
+export type HoldoutTestRequest = z.infer<typeof HoldoutTestRequestSchema>;
+
 export const CompileRequestSchema = z.object({
   source: z.string().min(1, 'Pine source cannot be empty'),
 });

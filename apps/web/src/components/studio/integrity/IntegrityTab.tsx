@@ -5,7 +5,9 @@ import { useEffect, useRef, useState } from 'react';
 import {
   cancelValidation,
   fetchValidation,
+  listHoldoutTests,
   listValidations,
+  startHoldoutTest,
   startValidation,
   subscribeToJob,
   type CheckResultView,
@@ -13,7 +15,7 @@ import {
 } from '@/lib/api';
 import { CheckCard } from './CheckCard';
 import { CheckVisual } from './CheckVisual';
-import { HoldoutAction } from './HoldoutAction';
+import { HoldoutAction, type HoldoutResultView } from './HoldoutAction';
 import { VerdictHeader } from './VerdictHeader';
 
 /**
@@ -65,12 +67,29 @@ export function IntegrityTab({
     queryFn: () => listValidations(runId),
   });
 
+  /*
+   * Holdout tests are listed separately from validations, because they are a different KIND (A59):
+   * a validation can be re-run for free, a holdout test cannot. Folding them together would let
+   * the one irreversible result scroll away among sixteen repeatable ones.
+   */
+  const holdouts = useQuery({
+    queryKey: ['holdout-tests', runId],
+    queryFn: () => listHoldoutTests(runId),
+  });
+
+  const latestHoldout = holdouts.data?.find((v) => v.state === 'completed');
   const latestCompleted = history.data?.find((v) => v.state === 'completed');
 
   const detail = useQuery({
     queryKey: ['validation', latestCompleted?.id],
     queryFn: () => fetchValidation(latestCompleted!.id),
     enabled: latestCompleted !== undefined,
+  });
+
+  const latestHoldoutDetail = useQuery({
+    queryKey: ['validation', latestHoldout?.id],
+    queryFn: () => fetchValidation(latestHoldout!.id),
+    enabled: latestHoldout !== undefined,
   });
 
   // Held in a ref so the effect below can dispose the previous subscription without listing the
@@ -92,6 +111,7 @@ export function IntegrityTab({
         setActiveJob(null);
         setProgress(null);
         void queryClient.invalidateQueries({ queryKey: ['validations', runId] });
+        void queryClient.invalidateQueries({ queryKey: ['holdout-tests', runId] });
       },
       onError: (message) => {
         setError(message);
@@ -106,6 +126,24 @@ export function IntegrityTab({
     setError(null);
     try {
       const started = await startValidation(runId);
+      setActiveJob({ jobId: started.jobId, validationId: started.validationId });
+      setProgress({ percent: 0, message: 'queued' });
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  /**
+   * Spend a look at the holdout.
+   *
+   * Deliberately shares the job plumbing with `run` — same progress, same cancel, same refetch —
+   * because it IS the same kind of work from the UI's side. What makes it different is the
+   * confirmation in front of it and the fact that the count it produces is permanent.
+   */
+  const runHoldoutTest = async (): Promise<void> => {
+    setError(null);
+    try {
+      const started = await startHoldoutTest(runId, 'overfitting-holdout');
       setActiveJob({ jobId: started.jobId, validationId: started.validationId });
       setProgress({ percent: 0, message: 'queued' });
     } catch (e: unknown) {
@@ -199,14 +237,9 @@ export function IntegrityTab({
                   viewCount={detail.data.context.holdoutViewCount ?? 0}
                   // Not carried on the validation context; the holdout check's own card reports it.
                   retiredSeals={null}
-                  onTestOnHoldout={() => {
-                    // Not yet wired to an endpoint: the confirmation exists so the consequence is
-                    // stated, and running against sealed data needs an unseal route the API does
-                    // not expose yet.
-                    setError(
-                      'Testing on the holdout is not wired to the API yet. The seal, the count and this confirmation are in place; the unseal endpoint is not.',
-                    );
-                  }}
+                  busy={activeJob !== null}
+                  lastResult={holdoutResultOf(latestHoldoutDetail.data)}
+                  onTestOnHoldout={() => void runHoldoutTest()}
                 />
               )}
               {report.results.map((check) => {
@@ -236,6 +269,33 @@ export function IntegrityTab({
       </div>
     </div>
   );
+}
+
+/**
+ * The holdout test's verdict, as the action panel needs it.
+ *
+ * Read from the STORED report rather than recomputed, so what the panel says is what the job
+ * concluded — including the view count that qualified it (A59).
+ */
+function holdoutResultOf(detail: ValidationDetail | undefined): HoldoutResultView | null {
+  if (detail === undefined || detail.report === null) return null;
+  const r = detail.report as {
+    result?: { verdict?: string; explanation?: string; retention?: number | null };
+    viewCountAfter?: number;
+    sealedFromMs?: number;
+    sealedToMs?: number;
+  };
+  if (r.result?.verdict === undefined) return null;
+
+  return {
+    verdict: r.result.verdict,
+    explanation: r.result.explanation ?? '',
+    retention: r.result.retention ?? null,
+    viewCountAfter: r.viewCountAfter ?? 0,
+    ranAtMs: detail.completedAtMs,
+    sealedFromMs: r.sealedFromMs ?? null,
+    sealedToMs: r.sealedToMs ?? null,
+  };
 }
 
 function reportOf(detail: ValidationDetail | undefined): ValidationReportShape | null {

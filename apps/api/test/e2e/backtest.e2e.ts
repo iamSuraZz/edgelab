@@ -1,6 +1,16 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { findSymbolByCode, readM1Bars } from '@edgelab/db';
+import {
+  coverageForAll,
+  createDbClient,
+  findSymbolByCode,
+  holdoutHistory,
+  readHoldoutFresh,
+  readM1Bars,
+  retireHoldout,
+  sealHoldout,
+  type DbClient,
+} from '@edgelab/db';
 import { PineTsEngine, STRATEGY_FIXTURES, orchestrateRun } from '@edgelab/engine';
 import {
   DEFAULT_COSTS,
@@ -632,6 +642,101 @@ describe('the full backtest chain over HTTP', () => {
       expect(outcome.events.every((e) => e.queue === 'validation')).toBe(true);
       expect(outcome.final.state).toBe('completed');
     }, 300_000);
+  });
+
+  describe('POST /backtests/:id/holdout-test', () => {
+    /**
+     * The one route that reads sealed data, and the one assertion that matters about it: the view is
+     * COUNTED (A59). Everything else this endpoint does is ordinary job plumbing.
+     *
+     * Uses its own seal, created here and retired afterwards, so it cannot disturb whatever seal the
+     * machine happens to be carrying.
+     */
+    let db: DbClient;
+    let symbolId: string;
+    let sealedId: string;
+    let retiredId: string;
+
+    beforeAll(async () => {
+      db = createDbClient(harness.env.DATABASE_URL, { max: 2 });
+      const symbol = await findSymbolByCode(db, SYMBOL);
+      symbolId = symbol!.id;
+
+      const coverage = (await coverageForAll(db)).find((c) => c.symbolId === symbolId)!;
+      const window = { earliestMs: coverage.firstBar!, latestMs: coverage.lastBar! };
+
+      // An EARLIER seal, retired: its view count is finished history, and the point of the second
+      // assertion below is that a look at today's holdout does not rewrite it.
+      const retired = await sealHoldout({ client: db, symbolId, fraction: 0.5, ...window });
+      retiredId = retired.id;
+      await retireHoldout(db, symbolId);
+
+      const active = await sealHoldout({ client: db, symbolId, fraction: 0.2, ...window });
+      sealedId = active.id;
+    });
+
+    afterAll(async () => {
+      await retireHoldout(db, symbolId);
+      await db.pool.end();
+    });
+
+    it('refuses a check that cannot be answered by reading the holdout', async () => {
+      const { status, body } = await apiPost<{ message: string }>(
+        harness,
+        `/backtests/${runId}/holdout-test`,
+        { checkId: 'lookahead-static' },
+      );
+
+      // Named, not silently substituted: spending a holdout on a question nobody asked is worse
+      // than refusing.
+      expect(status).toBe(400);
+      expect(body.message).toMatch(/overfitting-holdout/);
+    });
+
+    it('counts the view, and counts it exactly once', async () => {
+      const before = await readHoldoutFresh(db, symbolId);
+      expect(before?.id).toBe(sealedId);
+      const startingCount = before?.viewCount ?? 0;
+
+      const { status, body } = await apiPost<{ validationId: string; jobId: string }>(
+        harness,
+        `/backtests/${runId}/holdout-test`,
+        { checkId: 'overfitting-holdout' },
+      );
+      expect(status).toBe(201);
+
+      await followJobEvents(harness, body.jobId);
+
+      const after = await readHoldoutFresh(db, symbolId);
+      expect(after?.viewCount).toBe(startingCount + 1);
+      expect(after?.lastViewedAtMs).not.toBeNull();
+    }, 300_000);
+
+    it('leaves a RETIRED seal untouched', async () => {
+      // Scoping the increment by symbol alone bumped every seal the symbol ever had, rewriting
+      // counts that are meant to be permanent (A59).
+      const history = await holdoutHistory(db, symbolId);
+      const retired = history.find((h) => h.id === retiredId);
+
+      expect(retired?.retiredAtMs).not.toBeNull();
+      expect(retired?.viewCount).toBe(0);
+    });
+
+    it('stores the result under its own kind, apart from validations', async () => {
+      const { body: holdouts } = await apiGet<{ kind: string; verdict: string | null }[]>(
+        harness,
+        `/backtests/${runId}/holdout-tests`,
+      );
+      const { body: vals } = await apiGet<{ kind: string }[]>(
+        harness,
+        `/backtests/${runId}/validations`,
+      );
+
+      expect(holdouts.length).toBeGreaterThan(0);
+      expect(holdouts.every((h) => h.kind === 'holdout')).toBe(true);
+      // The one result you cannot re-run for free does not get lost among sixteen you can.
+      expect(vals.every((v) => v.kind === 'validation')).toBe(true);
+    });
   });
 });
 

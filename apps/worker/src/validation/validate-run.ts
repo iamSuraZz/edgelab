@@ -1,6 +1,6 @@
 import {
   findSymbolByCode,
-  getHoldout,
+  readHoldoutFresh,
   holdoutHistory,
   listSymbols,
   readM1,
@@ -811,7 +811,9 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
 
   // Read once and reused: the check renders it, and the stored context records WHICH seal this
   // verdict was obtained under and how many times it had been viewed by then.
-  const activeHoldout = await getHoldout(params.db, symbolRow.id);
+  // Uncached: a holdout test in another process may have spent a look since this one started,
+  // and reporting the count this process last saw would understate what the holdout has cost (A59).
+  const activeHoldout = await readHoldoutFresh(params.db, symbolRow.id);
 
   const results: CheckResult[] = [
     holdoutResult(

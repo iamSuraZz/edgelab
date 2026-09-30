@@ -1,6 +1,14 @@
 import type { MessagePort } from 'node:worker_threads';
 
-import { createDbClient, findSymbolByCode, listSymbols, readM1, readM1Bars, type DbClient } from '@edgelab/db';
+import {
+  createDbClient,
+  findSymbolByCode,
+  listSymbols,
+  readM1,
+  readM1Bars,
+  readM1Unsealed,
+  type DbClient,
+} from '@edgelab/db';
 import {
   PineTsEngine,
   flattenMetrics,
@@ -48,6 +56,14 @@ export interface BacktestTaskInput {
   readonly props: Record<string, unknown>;
   readonly warmupBars: number;
   readonly rfAnnual: number;
+  /**
+   * Read THROUGH an active seal, counting the view (A59).
+   *
+   * Off for every ordinary run: the seal is enforced at `readM1` precisely so that no caller has to
+   * remember it (A37). The holdout test is the one deliberate exception, and it pays for the
+   * exception by recording the look before a single bar comes back.
+   */
+  readonly unsealed?: boolean;
   /** Progress sink. Transferred, so it must be listed in the run's `transferList`. */
   readonly progressPort?: MessagePort;
 }
@@ -166,7 +182,12 @@ export default async function backtestTask(input: BacktestTaskInput): Promise<Ba
   const barsFromMs = input.fromMs - warmupSpanMs(input.timeframe, input.warmupBars);
   // A seal cutting the range short is ANNOUNCED, never silent: a run that covers less than it
   // appears to is worse than one that refuses, because its numbers look like an answer.
-  const m1Read = await readM1(db, symbolRow.id, barsFromMs, input.toMs);
+  const m1Read =
+    input.unsealed === true
+      ? // Counts the view FIRST, inside `readM1Unsealed`, so there is no path that returns sealed
+        // bars and then fails to record that it did. Nothing is truncated, so no truncation notice.
+        { bars: await readM1Unsealed(db, symbolRow.id, barsFromMs, input.toMs), truncation: null }
+      : await readM1(db, symbolRow.id, barsFromMs, input.toMs);
   const m1 = m1Read.bars;
 
   // Which instruments exist at all, for the conversion planner below. One query, so a

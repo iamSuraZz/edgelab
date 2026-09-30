@@ -35,6 +35,7 @@ import {
 import { PINETS_VERSION } from '@edgelab/engine';
 import {
   CreateBacktestSchema,
+  HoldoutTestRequestSchema,
   ListRunsQuerySchema,
   SeriesQuerySchema,
   jobCancelChannel,
@@ -46,6 +47,7 @@ import {
   type EquitySample,
   type SeriesQuery,
   OptimizationSpecSchema,
+  type HoldoutTestRequest,
   type OptimizationSpecRequest,
 } from '@edgelab/shared';
 
@@ -66,6 +68,12 @@ import { BACKTEST_QUEUE, QUEUE_NAME, VALIDATION_QUEUE } from '../infra/queues.mo
  * piscina, pinets and every provider SDK into the API image.
  */
 const OPTIMIZATION_JOB_NAME = 'optimization';
+
+/** Job name the worker switches on for a holdout test. A literal, for the same reason. */
+const HOLDOUT_JOB_NAME = 'holdout';
+
+/** The one check that can be answered by reading sealed data. */
+const HOLDOUT_CHECK_ID = 'overfitting-holdout';
 
 /**
  * A globally unique job id, rather than BullMQ's per-queue counter (A57).
@@ -497,6 +505,55 @@ export class BacktestsService {
     return { validationId, jobId: String(job.id) };
   }
 
+  /**
+   * Run one check against the symbol's sealed holdout.
+   *
+   * The only route in this API that reads withheld data, and the only one whose cost is permanent:
+   * the view is recorded before a single bar is returned (A59). It is therefore explicit — a
+   * separate endpoint rather than a flag on `validate` — so that nothing reaches sealed data as a
+   * side effect of asking for something else.
+   *
+   * The refusals that matter (no seal, an empty holdout) are detected in the worker, where the seal
+   * is read, and reported through the job's terminal event. Enqueuing anyway costs nothing and
+   * keeps ONE place that decides whether a holdout can be tested.
+   */
+  async testOnHoldout(
+    runId: string,
+    checkId: string,
+  ): Promise<{ validationId: string; jobId: string }> {
+    const run = await this.requireRun(runId);
+    if (run.state !== 'completed') {
+      throw ApiException.conflict(
+        `Run ${run.id} is ${run.state}. Testing on the holdout needs a completed run to compare ` +
+          `against: without an in-sample result there is nothing the holdout result would mean.`,
+      );
+    }
+
+    /*
+     * One supported check, and it refuses the rest by NAME rather than quietly doing this one.
+     *
+     * The other sixteen checks interrogate the run you already have; this one asks a different
+     * question of different data. Accepting their ids and running something else would spend a
+     * holdout on a question nobody asked.
+     */
+    if (checkId !== HOLDOUT_CHECK_ID) {
+      throw ApiException.validation(
+        `Only \`${HOLDOUT_CHECK_ID}\` can be run against the holdout; \`${checkId}\` cannot. ` +
+          `The other checks examine the run you already have, whereas this one re-runs the ` +
+          `strategy on data it has never seen.`,
+      );
+    }
+
+    const validationId = await createValidation(this.db, { runId: run.id, kind: 'holdout' });
+    const job = await this.validationQueue.add(
+      HOLDOUT_JOB_NAME,
+      { validationId, runId: run.id },
+      { jobId: newJobId() },
+    );
+
+    return { validationId, jobId: String(job.id) };
+  }
+
   /** Past validations for a run, newest first, without their reports. */
   async validations(runId: string): Promise<unknown> {
     await this.requireRun(runId);
@@ -582,6 +639,12 @@ export class BacktestsService {
     return listValidations(this.db, runId, 'optimization');
   }
 
+  /** Past holdout tests, newest first. Listed apart because each one cost a look (A59). */
+  async holdoutTests(runId: string): Promise<unknown> {
+    await this.requireRun(runId);
+    return listValidations(this.db, runId, 'holdout');
+  }
+
   private async requireRun(runId: string): Promise<RunDetailRow> {
     const run = await readRun(this.db.db, runId);
     if (run === null) throw ApiException.notFound(`No backtest run with id ${runId}.`);
@@ -634,6 +697,23 @@ export class BacktestsController {
   @Get(':id/validations')
   validations(@Param('id') id: string): Promise<unknown> {
     return this.backtests.validations(id);
+  }
+
+  /**
+   * The only route that reads sealed data. POST because it CHANGES something — the view count —
+   * which is the whole mechanism (A59).
+   */
+  @Get(':id/holdout-tests')
+  holdoutTests(@Param('id') id: string): Promise<unknown> {
+    return this.backtests.holdoutTests(id);
+  }
+
+  @Post(':id/holdout-test')
+  holdoutTest(
+    @Param('id') id: string,
+    @Body(new ZodPipe(HoldoutTestRequestSchema)) body: HoldoutTestRequest,
+  ): Promise<unknown> {
+    return this.backtests.testOnHoldout(id, body.checkId);
   }
 
   @Post(':id/optimize')

@@ -2254,3 +2254,47 @@ nothing would not be.
 **CI therefore does not exercise these four tests**, and that is stated rather than implied: the
 verification of record for slice D's DONE WHEN is the local run against the real 2022 series, 4/4.
 Full smoke locally is **27 passed**.
+
+## A59 — The holdout is testable, and the test is the only thing that spends it
+
+`POST /backtests/:id/holdout-test` runs one check against the sealed range. It is a separate
+endpoint rather than a flag on `validate`, and it names the check in its body with no default,
+because this is the only request in the API whose cost is permanent: the view is recorded before a
+single bar comes back. Nothing should reach sealed data as a side effect of asking for something
+else, and a body that could be empty would let a mis-wired client burn a holdout by accident.
+
+**One check is supported — `overfitting-holdout` — and the rest are refused BY NAME.** The other
+sixteen interrogate the run you already have; this one re-runs the strategy on data it has never
+seen. Accepting their ids and running this one instead would spend a holdout on a question nobody
+asked.
+
+The run is its OWN run from the original starting capital (A24), never a continuation: a
+continuation inherits position sizes grown by in-sample profits, so the holdout result would partly
+re-measure the in-sample period. The comparison is the OOS split's — same `SegmentMetrics`, same
+per-calendar-day normalisation (A36), same refusal to divide by a non-positive baseline. A holdout
+is an out-of-sample test whose only special property is that the data was WITHHELD rather than
+merely later, and a second scoring rule would make the two incomparable for nothing.
+
+**A clean pass on an already-viewed holdout is reported as `warn`.** The arithmetic cannot tell the
+first look from the fifth — the numbers are identical — so the distinction has to be carried by the
+count or it is lost. A `fail` is never softened that way: a loss is a loss however often you look.
+The cost is stated on every outcome including `n/a`, so the cheapest-looking result is not the one
+that quietly spent the holdout.
+
+### Two defects the first end-to-end run exposed
+
+The route worked, and reported **`viewCount 0 -> 0`** while the database said `1`.
+
+1. **`recordHoldoutView` matched on `symbolId` alone, so it incremented every seal the symbol had
+   ever had — retired ones included.** A retired seal's count is finished history, and A38 keeps
+   those rows precisely so the record survives; bumping them rewrites it. Now scoped to the active
+   seal. The four retired EURUSD seals had been bumped from 0 to 1 by this and were reset, which is
+   safe only because `pnpm holdout --status` had recorded them as "never viewed" minutes earlier.
+2. **The seal cache is per-client, and the view is recorded in a WORKER THREAD** — its own client,
+   its own cache — so the main process kept serving the count it last saw. `getHoldout` stays
+   cached, because it is consulted on every bar read and the BOUNDARY only moves via this module;
+   `readHoldoutFresh` is the uncached read, used by every reporting path. Reporting a stale count
+   understates what a holdout has cost, which is the one number the mechanism exists to keep honest.
+
+Both are covered by e2e assertions — the count rises by exactly one, and a retired seal is untouched
+— on a seal the test creates and retires itself so it cannot disturb the machine's own.

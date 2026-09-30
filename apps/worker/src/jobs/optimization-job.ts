@@ -4,7 +4,7 @@ import {
   completeValidation,
   failValidation,
   findSymbolByCode,
-  getHoldout,
+  readHoldoutFresh,
   readRun,
   setValidationState,
   type DbClient,
@@ -144,7 +144,7 @@ export async function processOptimizationJob(
 async function contextFor(db: DbClient, runId: string): Promise<ValidationContext> {
   const run = await readRun(db.db, runId);
   const symbol = run === null ? null : await findSymbolByCode(db, run.symbol);
-  const holdout = symbol === null ? null : await getHoldout(db, symbol.id);
+  const holdout = symbol === null ? null : await readHoldoutFresh(db, symbol.id);
 
   return {
     feed: null,

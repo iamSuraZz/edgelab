@@ -1,7 +1,7 @@
 import {
   createDbClient,
   findSymbolByCode,
-  getHoldout,
+  readHoldoutFresh,
   holdoutHistory,
   retireHoldout,
   sealHoldout,
@@ -75,7 +75,8 @@ async function printStatus(
   symbolId: string,
   code: string,
 ): Promise<void> {
-  const active = await getHoldout(db, symbolId);
+  // Uncached, for the same reason the report is: the count is what this command exists to show.
+  const active = await readHoldoutFresh(db, symbolId);
   const history = await holdoutHistory(db, symbolId);
 
   process.stdout.write(`\n${code}: ${describeHoldout(active, history)}\n`);

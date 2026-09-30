@@ -507,13 +507,14 @@ export interface ValidationContextView {
 export interface ValidationSummary {
   readonly id: string;
   readonly runId: string;
-  readonly kind: 'validation' | 'optimization';
+  readonly kind: 'validation' | 'optimization' | 'holdout';
   readonly state: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
   readonly verdict: string | null;
   readonly context: ValidationContextView;
   readonly error: string | null;
   readonly elapsedMs: number | null;
   readonly createdAtMs: number;
+  readonly completedAtMs: number | null;
 }
 
 export interface ValidationDetail extends ValidationSummary {
@@ -526,8 +527,29 @@ export function startValidation(runId: string): Promise<{ validationId: string; 
   return request(`/backtests/${runId}/validate`, { method: 'POST' });
 }
 
+/**
+ * Run a check against the sealed holdout, counting the view.
+ *
+ * `checkId` is passed explicitly rather than defaulted, matching the API: this call spends
+ * something permanent, and a caller that never names what it is asking for can spend it by
+ * accident (A59).
+ */
+export function startHoldoutTest(
+  runId: string,
+  checkId: string,
+): Promise<{ validationId: string; jobId: string }> {
+  return request(`/backtests/${runId}/holdout-test`, {
+    method: 'POST',
+    body: JSON.stringify({ checkId }),
+  });
+}
+
 export function listValidations(runId: string): Promise<ValidationSummary[]> {
   return request(`/backtests/${runId}/validations`);
+}
+
+export function listHoldoutTests(runId: string): Promise<ValidationSummary[]> {
+  return request(`/backtests/${runId}/holdout-tests`);
 }
 
 export function listOptimizations(runId: string): Promise<ValidationSummary[]> {

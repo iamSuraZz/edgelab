@@ -128,10 +128,47 @@ export async function recordHoldoutView(
   await client.db
     .update(holdouts)
     .set({ viewCount: sql`${holdouts.viewCount} + 1`, lastViewedAt: toDbTime(Date.now()) })
-    .where(eq(holdouts.symbolId, symbolId));
+    /*
+     * The ACTIVE seal only (A59).
+     *
+     * Matching on `symbolId` alone bumped every seal the symbol had ever had, retired ones
+     * included — rewriting counts that are the permanent record A38 exists to keep. A retired
+     * seal's history is finished; a look at today's holdout is not a look at one dropped last
+     * month.
+     */
+    .where(and(eq(holdouts.symbolId, symbolId), isNull(holdouts.retiredAt)));
 
   cacheFor(client).delete(symbolId);
-  return getHoldout(client, symbolId);
+  return readHoldoutFresh(client, symbolId);
+}
+
+/**
+ * The active seal, read from the database, bypassing the cache.
+ *
+ * For REPORTING, never for enforcement. `getHoldout` is cached because it is consulted on every bar
+ * read and invalidated by the writes that go through this module — but a view recorded in a WORKER
+ * THREAD writes through its own client and its own cache, so the main process keeps serving the
+ * count it last saw. The boundary (`sealedFromMs`) is unaffected, since only sealing and retiring
+ * move it and both happen here; the view COUNT is exactly the field another process changes.
+ *
+ * Reporting a stale count would understate what a holdout has cost, which is the one number this
+ * whole mechanism exists to keep honest.
+ */
+export async function readHoldoutFresh(
+  client: DbClient,
+  symbolId: string,
+): Promise<Holdout | null> {
+  const rows = await client.db
+    .select()
+    .from(holdouts)
+    .where(and(eq(holdouts.symbolId, symbolId), isNull(holdouts.retiredAt)))
+    .orderBy(desc(holdouts.createdAt))
+    .limit(1);
+
+  const row = rows[0];
+  const value = row === undefined ? null : toHoldout(row);
+  cacheFor(client).set(symbolId, value);
+  return value;
 }
 
 /**

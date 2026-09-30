@@ -12,6 +12,24 @@ import { useState } from 'react';
  * times" and "viewed 4 times" are different decisions, and the second should feel different.
  */
 
+/** The stored outcome of the last holdout test, when there has been one. */
+export interface HoldoutResultView {
+  readonly verdict: string;
+  readonly explanation: string;
+  readonly retention: number | null;
+  readonly viewCountAfter: number;
+  readonly ranAtMs: number | null;
+  readonly sealedFromMs: number | null;
+  readonly sealedToMs: number | null;
+}
+
+const VERDICT_TONE: Record<string, string> = {
+  pass: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200',
+  warn: 'border-amber-500/40 bg-amber-500/10 text-amber-100',
+  fail: 'border-rose-500/40 bg-rose-500/10 text-rose-100',
+  'n/a': 'border-border bg-slate-500/10 text-slate-300',
+};
+
 export interface HoldoutActionProps {
   readonly sealedFromMs: number | null;
   readonly viewCount: number;
@@ -26,6 +44,8 @@ export interface HoldoutActionProps {
   /** Runs the suite with the seal lifted. The caller performs it; this only confirms. */
   readonly onTestOnHoldout: () => void;
   readonly busy?: boolean;
+  /** The last result, shown in place so the panel does not invite a second look casually. */
+  readonly lastResult?: HoldoutResultView | null;
 }
 
 export function HoldoutAction({
@@ -34,6 +54,7 @@ export function HoldoutAction({
   retiredSeals,
   onTestOnHoldout,
   busy = false,
+  lastResult = null,
 }: HoldoutActionProps): React.JSX.Element | null {
   const [confirming, setConfirming] = useState(false);
 
@@ -62,6 +83,25 @@ export function HoldoutAction({
         )}
       </p>
 
+      {lastResult !== null && (
+        <div
+          className={`mt-2 rounded border p-2 ${VERDICT_TONE[lastResult.verdict] ?? VERDICT_TONE['n/a']!}`}
+          data-testid="holdout-result"
+        >
+          <p className="text-xs font-medium uppercase" data-testid="holdout-result-verdict">
+            {lastResult.verdict}
+          </p>
+          <p className="mt-1 text-xs leading-relaxed">{lastResult.explanation}</p>
+          {lastResult.sealedFromMs !== null && lastResult.sealedToMs !== null && (
+            <p className="mt-1 text-[0.65rem] opacity-80">
+              Tested on {new Date(lastResult.sealedFromMs).toISOString().slice(0, 10)} →{' '}
+              {new Date(lastResult.sealedToMs).toISOString().slice(0, 10)}
+              {lastResult.retention !== null && ` · retention ${lastResult.retention.toFixed(2)}`}
+            </p>
+          )}
+        </div>
+      )}
+
       {!confirming ? (
         <button
           type="button"
@@ -73,7 +113,7 @@ export function HoldoutAction({
           data-testid="test-on-holdout"
         >
           <Unlock className="h-3 w-3" />
-          Test on holdout
+          {lastResult === null ? 'Test on holdout' : 'Test again'}
         </button>
       ) : (
         <div
