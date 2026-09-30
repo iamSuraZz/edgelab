@@ -2053,3 +2053,29 @@ The split lives in `packages/validation/src/two-questions.ts` and is derived fro
 check lands on the right side by being named consistently and an unrecognised one surfaces as
 `unclassified` rather than being silently dropped. Both the CLI and the tab read it, so they cannot
 disagree about which check answers which question.
+
+## A53 · The chart's focus is a TIME, not a trade
+
+The evidence jump resolved a bar index to "the trade that opened or closed on it". That leaves the
+most important evidence unclickable, because look-ahead findings name bars that frequently carry no
+trade at all — the causality check's first peek on the leaking fixture is **bar 0**, and prefix
+invariance names the bar a DECISION changed on, which is usually not a bar anything traded.
+
+Two changes:
+
+**The checks emit a clickable instant.** A bar INDEX was never usable by the UI in the first place:
+it indexes the engine's bar array, warmup included, while the chart draws only the requested range,
+so the two do not correspond. Look-ahead evidence now carries a numeric `*AtMs` key beside its
+human-readable ISO string — `divergedAtMs` on prefix invariance and future splice, `peekedAtMs` on
+causality. Any key ending `AtMs` is clickable by convention, so a future check joins in by naming
+its field consistently rather than by being added to a list.
+
+**The store's focus is an instant.** `focusAt(atMs)` scrolls and marks; `focusTrade(seq, atMs)` is
+the case that ALSO highlights the trade. `focusAt` clears any trade highlight, because leaving the
+previous trade marked while centring somewhere else attributes the evidence to the wrong place.
+
+The chart marks an instant with a vertical marker rather than a horizontal level: the claim being
+made is "here, at this time", and there is no price associated with a look-ahead divergence, so
+drawing one would invent a claim the evidence does not make. Lightweight Charts has no vertical-line
+primitive, so it is a two-point series registered in the same ref the trade lines use — which means
+the next focus clears it without a special case.

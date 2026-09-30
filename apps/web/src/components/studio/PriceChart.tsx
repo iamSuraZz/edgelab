@@ -46,6 +46,7 @@ export function PriceChart({
   const levelLinesRef = useRef<ISeriesApi<'Line'>[]>([]);
   const theme = useThemeStore((s) => s.theme);
   const focusedSeq = useStudio((s) => s.focusedTradeSeq);
+  const focusedAtMs = useStudio((s) => s.focusedAtMs);
 
   const candles = useQuery({
     queryKey: ['candles', symbol, timeframe, fromMs, toMs],
@@ -158,9 +159,24 @@ export function PriceChart({
     for (const line of levelLinesRef.current) chart.removeSeries(line);
     levelLinesRef.current = [];
 
-    if (focusedSeq === null) return;
+    /*
+     * An INSTANT with no trade on it is the ordinary case for look-ahead evidence (A53): the
+     * causality check's first peek on a leaking script is bar 0, and prefix invariance names the
+     * bar a decision changed on, which is usually not a bar anything traded. Centre and mark it,
+     * then fall through to the trade lines only when a trade was what was focused.
+     */
+    if (focusedSeq === null) {
+      if (focusedAtMs === null) return;
+      markInstant(chart, focusedAtMs, chartPalette(theme), levelLinesRef);
+      return;
+    }
+
     const trade = trades.find((t) => t.seq === focusedSeq);
-    if (trade === undefined) return;
+    if (trade === undefined) {
+      // A trade that is not in this run's list still has an instant worth showing.
+      if (focusedAtMs !== null) markInstant(chart, focusedAtMs, chartPalette(theme), levelLinesRef);
+      return;
+    }
 
     const palette = chartPalette(theme);
     const span: [UTCTimestamp, UTCTimestamp] = [
@@ -201,7 +217,7 @@ export function PriceChart({
       from: (span[0] - pad) as UTCTimestamp,
       to: (span[1] + pad) as UTCTimestamp,
     });
-  }, [focusedSeq, trades, theme]);
+  }, [focusedSeq, focusedAtMs, trades, theme]);
 
   return (
     <div className="relative h-full min-h-0" data-testid="price-chart">
@@ -227,4 +243,49 @@ export function PriceChart({
       )}
     </div>
   );
+}
+
+/**
+ * Centre on an instant and mark it.
+ *
+ * A vertical marker rather than a horizontal level, because the claim being made is "here, at this
+ * time" — there is no price associated with a look-ahead divergence, and drawing one at an
+ * arbitrary level would invent a claim the evidence does not make.
+ *
+ * Lightweight Charts has no vertical-line primitive, so the marker is a two-point series at the
+ * focused instant spanning the visible price range. It is registered in the same ref the trade
+ * lines use, so the next focus clears it without special-casing.
+ */
+function markInstant(
+  chart: IChartApi,
+  atMs: number,
+  palette: ReturnType<typeof chartPalette>,
+  linesRef: { current: ISeriesApi<'Line'>[] },
+): void {
+  const at = toUtcSeconds(atMs);
+
+  const marker = chart.addSeries(LineSeries, {
+    color: palette.primary,
+    lineWidth: 2,
+    lineStyle: 2,
+    priceLineVisible: false,
+    lastValueVisible: false,
+    crosshairMarkerVisible: false,
+  });
+
+  // Two points one second apart: a "vertical" line in a library that only draws series.
+  marker.setData([
+    { time: at, value: 0 },
+    { time: (at + 1) as UTCTimestamp, value: 0 },
+  ]);
+  marker.applyOptions({ autoscaleInfoProvider: () => null });
+  linesRef.current.push(marker);
+
+  // Four hours either side: enough to see what led into the bar, which is the whole point of
+  // jumping to it.
+  const pad = 4 * 3_600;
+  chart.timeScale().setVisibleRange({
+    from: (at - pad) as UTCTimestamp,
+    to: (at + pad) as UTCTimestamp,
+  });
 }

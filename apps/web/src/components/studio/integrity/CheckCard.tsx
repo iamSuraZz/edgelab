@@ -25,19 +25,25 @@ const BADGE: Record<string, string> = {
 
 export interface CheckCardProps {
   readonly check: CheckResultView;
-  /** Jump to a bar on the Chart tab. Evidence keys naming a bar become buttons when set. */
-  readonly onJumpToBar?: (bar: number) => void;
+  /** Jump to an instant on the Chart tab. Evidence keys ending `AtMs` become buttons when set. */
+  readonly onJumpToTime?: (atMs: number) => void;
   /** Jump to a trade. Evidence keys naming a trade sequence become buttons when set. */
   readonly onJumpToTrade?: (seq: number) => void;
 }
 
-/** Evidence keys whose value is a chart location rather than a measurement. */
-const BAR_KEYS = new Set(['firstDivergentBar', 'bar', 'cutBar', 'divergentBar']);
+/**
+ * Evidence keys that name a chart location.
+ *
+ * TIMES, by the `*AtMs` convention (A53). A bar INDEX is not a location the chart can use — it
+ * indexes the engine's array, warmup included — and the bar that matters usually carries no trade
+ * at all, so resolving it through a trade left the most important look-ahead evidence unclickable.
+ */
+const isTimeKey = (key: string): boolean => key.endsWith('AtMs');
 const TRADE_KEYS = new Set(['tradeSeq', 'trade', 'worstTrade', 'firstFlipTrade']);
 
 export function CheckCard({
   check,
-  onJumpToBar,
+  onJumpToTime,
   onJumpToTrade,
 }: CheckCardProps): React.JSX.Element {
   const [open, setOpen] = useState(check.status === 'fail');
@@ -123,7 +129,7 @@ export function CheckCard({
               key={key}
               name={key}
               value={value}
-              {...(onJumpToBar !== undefined ? { onJumpToBar } : {})}
+              {...(onJumpToTime !== undefined ? { onJumpToTime } : {})}
               {...(onJumpToTrade !== undefined ? { onJumpToTrade } : {})}
             />
           ))}
@@ -136,43 +142,49 @@ export function CheckCard({
 function EvidenceRow({
   name,
   value,
-  onJumpToBar,
+  onJumpToTime,
   onJumpToTrade,
 }: {
   name: string;
   value: number | string;
-  onJumpToBar?: (bar: number) => void;
+  onJumpToTime?: (atMs: number) => void;
   onJumpToTrade?: (seq: number) => void;
 }): React.JSX.Element {
-  const isBar = BAR_KEYS.has(name) && typeof value === 'number' && onJumpToBar !== undefined;
+  const isTime = isTimeKey(name) && typeof value === 'number' && onJumpToTime !== undefined;
   const isTrade = TRADE_KEYS.has(name) && typeof value === 'number' && onJumpToTrade !== undefined;
+
+  // An epoch-ms figure means nothing on screen; the label reads as a date and clicks as a jump.
+  const shown = isTime
+    ? new Date(value as number).toISOString().replace('T', ' ').slice(0, 16)
+    : String(value);
 
   return (
     <>
       <dt className="truncate text-muted">{humanise(name)}</dt>
       <dd className="text-right tabular-nums">
-        {isBar || isTrade ? (
+        {isTime || isTrade ? (
           <button
             type="button"
             className="text-primary underline underline-offset-2 hover:text-primary/80"
-            data-testid={isBar ? `jump-bar-${String(value)}` : `jump-trade-${String(value)}`}
+            data-testid={isTime ? 'jump-time' : `jump-trade-${String(value)}`}
             onClick={() => {
-              if (isBar) onJumpToBar(value as number);
+              if (isTime) onJumpToTime(value as number);
               else onJumpToTrade?.(value as number);
             }}
           >
-            {String(value)}
+            {shown}
           </button>
         ) : (
-          String(value)
+          shown
         )}
       </dd>
     </>
   );
 }
 
-/** `outOfSampleTrades` -> `Out of sample trades`. */
+/** `outOfSampleTrades` -> `Out of sample trades`; `divergedAtMs` -> `Diverged at`. */
 function humanise(key: string): string {
-  const spaced = key.replace(/([A-Z])/g, ' $1').toLowerCase();
+  const withoutSuffix = key.endsWith('AtMs') ? key.slice(0, -2) : key;
+  const spaced = withoutSuffix.replace(/([A-Z])/g, ' $1').toLowerCase();
   return spaced.charAt(0).toUpperCase() + spaced.slice(1);
 }

@@ -74,7 +74,16 @@ interface StudioState {
   liveRun: LiveRun | null;
   /** The last run to complete, which is what Results displays. */
   lastRunId: string | null;
-  /** Trade the user clicked in the table, for the chart to scroll to. */
+  /**
+   * Where the chart should scroll to and mark.
+   *
+   * A TIME, not a trade (A53). Look-ahead evidence names bars that frequently carry no trade at
+   * all — the causality check's first peek on a leaking script is bar 0 — so a trade-shaped focus
+   * left the most important evidence unclickable. A trade focus is the case that ALSO highlights
+   * the trade, which is why both fields exist rather than one replacing the other.
+   */
+  focusedAtMs: number | null;
+  /** Set only when the focus came from a trade, so the chart can highlight it as well. */
   focusedTradeSeq: number | null;
 
   setSource: (source: string) => void;
@@ -91,7 +100,10 @@ interface StudioState {
   setLiveRun: (run: LiveRun | null) => void;
   patchLiveRun: (patch: Partial<LiveRun>) => void;
   setLastRunId: (runId: string | null) => void;
-  focusTrade: (seq: number | null) => void;
+  /** Scroll to and mark an instant. The general case. */
+  focusAt: (atMs: number | null) => void;
+  /** Scroll to a trade, marking the instant AND highlighting the trade. */
+  focusTrade: (seq: number | null, atMs?: number | null) => void;
 }
 
 export const useStudio = create<StudioState>()(
@@ -108,6 +120,7 @@ export const useStudio = create<StudioState>()(
       liveRun: null,
       lastRunId: null,
       focusedTradeSeq: null,
+      focusedAtMs: null,
 
       setSource: (source) => {
         set((state) => {
@@ -176,11 +189,17 @@ export const useStudio = create<StudioState>()(
       },
 
       setLastRunId: (lastRunId) => {
-        set({ lastRunId, focusedTradeSeq: null });
+        set({ lastRunId, focusedTradeSeq: null, focusedAtMs: null });
       },
 
-      focusTrade: (focusedTradeSeq) => {
-        set({ focusedTradeSeq });
+      focusAt: (focusedAtMs) => {
+        // Clears any trade highlight: focusing an instant that belongs to no trade must not leave
+        // the previous trade marked, which would attribute the evidence to the wrong place.
+        set({ focusedAtMs, focusedTradeSeq: null });
+      },
+
+      focusTrade: (focusedTradeSeq, atMs) => {
+        set({ focusedTradeSeq, ...(atMs === undefined ? {} : { focusedAtMs: atMs }) });
       },
     }),
     {

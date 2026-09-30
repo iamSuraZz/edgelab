@@ -23,8 +23,8 @@ import { VerdictHeader } from './VerdictHeader';
 
 export interface IntegrityTabProps {
   readonly runId: string;
-  /** Switch to the Chart tab and centre on a bar. */
-  readonly onJumpToBar?: (bar: number) => void;
+  /** Switch to the Chart tab and centre on an instant. */
+  readonly onJumpToTime?: (atMs: number) => void;
   readonly onJumpToTrade?: (seq: number) => void;
 }
 
@@ -35,7 +35,7 @@ interface ValidationReportShape {
 
 export function IntegrityTab({
   runId,
-  onJumpToBar,
+  onJumpToTime,
   onJumpToTrade,
 }: IntegrityTabProps): React.JSX.Element {
   const queryClient = useQueryClient();
@@ -177,7 +177,7 @@ export function IntegrityTab({
                 <CheckCard
                   key={check.id}
                   check={check}
-                  {...(onJumpToBar !== undefined ? { onJumpToBar } : {})}
+                  {...(onJumpToTime !== undefined ? { onJumpToTime } : {})}
                   {...(onJumpToTrade !== undefined ? { onJumpToTrade } : {})}
                 />
               ))}

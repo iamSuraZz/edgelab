@@ -38,6 +38,7 @@ export function ResultsPane({
   const liveRun = useStudio((s) => s.liveRun);
   const [tab, setTab] = useState<Tab>('Overview');
   const focusTrade = useStudio((s) => s.focusTrade);
+  const focusAt = useStudio((s) => s.focusAt);
 
   const run = useQuery({
     queryKey: ['run', runId],
@@ -227,21 +228,18 @@ export function ResultsPane({
           <IntegrityTab
             runId={detail.id}
             /*
-             * Reuses the store's existing trade focus, which the price chart already honours for
-             * the Trades table — so an evidence link and a table row jump the same way rather than
-             * through two mechanisms that could drift.
-             *
-             * A BAR number is resolved to the trade that opened on it where one exists; the chart
-             * centres on trades, not on bar indices, and inventing a second focus kind to avoid
-             * that mapping would duplicate the scroll logic for one caller.
+             * The chart's focus is a TIME (A53). Look-ahead evidence names bars that frequently
+             * carry no trade — the causality check's first peek on a leaking script is bar 0 — so a
+             * trade-shaped jump left the most important evidence dead. A trade jump is the case
+             * that also highlights the trade, which is why both handlers exist.
              */
             onJumpToTrade={(seq) => {
-              focusTrade(seq);
+              const hit = trades.data?.trades.find((t) => t.seq === seq);
+              focusTrade(seq, hit?.entryTime ?? null);
               setTab('Chart');
             }}
-            onJumpToBar={(bar) => {
-              const hit = trades.data?.trades.find((t) => t.entryBar === bar || t.exitBar === bar);
-              if (hit !== undefined) focusTrade(hit.seq);
+            onJumpToTime={(atMs) => {
+              focusAt(atMs);
               setTab('Chart');
             }}
           />

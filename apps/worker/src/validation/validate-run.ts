@@ -987,6 +987,10 @@ function prefixResult(prefix: PrefixInvarianceResult | null, cutoffCount: number
         tradeSeq: d.tradeSeq,
         bar: d.bar,
         time: new Date(d.time).toISOString(),
+        // The clickable one (A53). A bar INDEX cannot be turned into a chart location by the UI —
+        // it indexes the engine's array, warmup included — and the bar that matters often carries
+        // no trade at all, so resolving it through a trade leaves the key evidence dead.
+        divergedAtMs: d.time,
         cutoff: new Date(d.cutoffMs).toISOString(),
         fullValue: d.fullValue,
         truncatedValue: d.truncatedValue,
@@ -1077,6 +1081,7 @@ function spliceResult(
         tradeSeq: d.tradeSeq,
         bar: d.bar,
         firstAffectedBarTime: new Date(d.time).toISOString(),
+        divergedAtMs: d.time,
         cutoff: new Date(d.cutoffMs).toISOString(),
         realValue: d.fullValue,
         splicedValue: d.truncatedValue,
@@ -1207,6 +1212,8 @@ function judgeCausality(params: {
         timeframe: worst.tf,
         bar: first.bar,
         barCloseTime: new Date(first.barCloseTime).toISOString(),
+        // Often bar 0 on a leaking script, which has no trade on it whatsoever.
+        peekedAtMs: first.barCloseTime,
         bucketCloseTime: new Date(first.bucketCloseTime).toISOString(),
         aheadByMinutes: Math.round(first.aheadByMs / 60_000),
         leakingBars: worst.result.leaks.length,
