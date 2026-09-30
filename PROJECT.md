@@ -95,7 +95,7 @@ pnpm run import:file mt5 EURUSD <abs.csv> 120        # 120 = broker server UTC o
 
 ## Current status — NOT v1.0
 
-Green: `build` 9/9, `typecheck` 16/16, `lint` clean, **969 tests** (`pnpm test`).
+Green: `build` 9/9, `typecheck` 17/17, `lint` clean, **982 tests** (`pnpm test`).
 CI runs all five checks on every push — see `.github/workflows/ci.yml`.
 
 **Verified against the real docker stack:**
@@ -183,8 +183,11 @@ cannot live in a suite that answers in seconds. **STEP 2 IS DONE.** Both `POST /
 jobs on one shared queue at concurrency 1 (A50), with SSE progress and cancel. Results persist with
 their context — feed, data version, engine, seal id and view count, requested vs effective range —
 and `GET /backtests/:id/validations`, `/optimizations` and `GET /validations/:id` serve them so the
-tab loads past results instead of re-running. `pnpm test:e2e` is **36/36**. **What remains for slice
-D is step 3, the Integrity tab** (spec saved verbatim to `docs/spec/06b-integrity-tab.md`) — after which the DONE WHEN, which
+tab loads past results instead of re-running. `pnpm test:e2e` is **36/36**. **Step 3 is UNDERWAY** (spec saved verbatim to `docs/spec/06b-integrity-tab.md`): the tab shell,
+the two-question verdict header (A52), check cards with "why it matters" tooltips, n/a reasons and
+clickable evidence that jumps to the Chart tab are built and compile. **Still to build: the six
+visuals, the walk-forward optimisation panel, the "Test on holdout" action — then the four DONE
+WHEN conditions, none of which has been run in a browser yet** — after which the DONE WHEN, which
 requires this exercised in a browser, can be met for the first time. Each must run through `pnpm validate` on the 2022 data before the next
 starts. A24 records four constraints agreed ahead of those steps; A26 (trailing-stop replay), A30
 (regime mix in the OOS report) and A31 (spread on resting fills from the replay) are post-slice-D
@@ -342,26 +345,28 @@ The leak is caught at the first cutoff on trade 97 — `exitBar` 468 on the real
 following week was replaced. That prefix invariance passes the same run 6 of 6 is the argument for
 keeping both layers: truncation covers unbounded leaks, splicing covers bounded ones.
 
-| Piece                                                     | State                       |
-| --------------------------------------------------------- | --------------------------- |
-| `security-log.ts` seam                                    | done, **wired to nothing**  |
-| `lookahead.ts` causality (A1a)                            | done, 14 tests, **unwired** |
-| `static-lint.ts` — tokenizer, line numbers                | done, 18 tests              |
-| `prefix-invariance.ts` — cutoffs + margin (A1)            | done, 16 tests              |
-| `same-bar.ts` estimate (A5)                               | done, 13 tests              |
-| `price-basis.ts` (A19) — one derivation, three consumers  | done, 16 tests              |
-| `per-fill.ts` (A21) — pips/ticks + gap breakdown          | done, 11 tests              |
-| A2 statuses `pass/warn/fail/n·a` + Inconclusive verdict   | done                        |
-| `validateRun` + `pnpm validate <runId>`                   | done, run on the real stack |
-| **Future-splice (A1b)** — the layer that catches the leak | done, 15 tests, verified    |
-| Fill audit + **bid/ask asymmetry (A20)**                  | done, verified on real data |
-| **M1 intrabar replay (A22)** — missed stops + phantoms    | done, 14 tests, verified    |
-| Cost stress (A27)                                         | done, verified on real data |
-| OOS split, walk-forward, sealed holdout                   | **not started**             |
-| Timeframe matrix, regimes, Monte Carlo                    | **not started**             |
-| `POST /backtests/:id/validate` + SSE (step 2)             | **done, e2e 31/31**         |
-| `POST /backtests/:id/optimize` + SSE (step 2)             | **done, e2e 36/36**         |
-| "Integrity & Overfitting" tab (step 3)                    | **not started**             |
+| Piece                                                      | State                         |
+| ---------------------------------------------------------- | ----------------------------- |
+| `security-log.ts` seam                                     | done, **wired to nothing**    |
+| `lookahead.ts` causality (A1a)                             | done, 14 tests, **unwired**   |
+| `static-lint.ts` — tokenizer, line numbers                 | done, 18 tests                |
+| `prefix-invariance.ts` — cutoffs + margin (A1)             | done, 16 tests                |
+| `same-bar.ts` estimate (A5)                                | done, 13 tests                |
+| `price-basis.ts` (A19) — one derivation, three consumers   | done, 16 tests                |
+| `per-fill.ts` (A21) — pips/ticks + gap breakdown           | done, 11 tests                |
+| A2 statuses `pass/warn/fail/n·a` + Inconclusive verdict    | done                          |
+| `validateRun` + `pnpm validate <runId>`                    | done, run on the real stack   |
+| **Future-splice (A1b)** — the layer that catches the leak  | done, 15 tests, verified      |
+| Fill audit + **bid/ask asymmetry (A20)**                   | done, verified on real data   |
+| **M1 intrabar replay (A22)** — missed stops + phantoms     | done, 14 tests, verified      |
+| Cost stress (A27)                                          | done, verified on real data   |
+| OOS split, walk-forward, sealed holdout                    | **not started**               |
+| Timeframe matrix, regimes, Monte Carlo                     | **not started**               |
+| `POST /backtests/:id/validate` + SSE (step 2)              | **done, e2e 31/31**           |
+| `POST /backtests/:id/optimize` + SSE (step 2)              | **done, e2e 36/36**           |
+| Integrity tab: header, cards, evidence jump (step 3)       | built, **not browser-tested** |
+| Integrity tab: visuals, optimisation panel, holdout action | **not started**               |
+| "Integrity & Overfitting" tab (step 3)                     | **not started**               |
 
 | Phase              | Core            | API                  | UI                   |
 | ------------------ | --------------- | -------------------- | -------------------- |
