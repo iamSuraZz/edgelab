@@ -95,22 +95,23 @@ pnpm run import:file mt5 EURUSD <abs.csv> 120        # 120 = broker server UTC o
 
 ## Current status — NOT v1.0
 
-Green: `build` 9/9, `typecheck` 17/17, `lint` clean, **993 tests** (`pnpm test`).
+Green: `build` 9/9, `typecheck` 17/17, `lint` clean, **1,009 tests** (`pnpm test`).
 CI runs all five checks on every push — see `.github/workflows/ci.yml`.
 
 **Verified against the real docker stack:**
 
-| check             | result | covers                                                                                              |
-| ----------------- | ------ | --------------------------------------------------------------------------------------------------- |
-| `pnpm test:e2e`   | 37/37  | **slice B DONE WHEN**, and **all of slice D step 2**                                                |
-| `pnpm test:smoke` | 27/27  | **slice C DONE WHEN**, and slice F's browser work                                                   |
-| `integrity.smoke` | 4/4    | **slice D DONE WHEN** — validate → verdict → evidence → chart. Skips in CI: needs a leaky run (A58) |
+| check             | result | covers                                                                                                   |
+| ----------------- | ------ | -------------------------------------------------------------------------------------------------------- |
+| `pnpm test:e2e`   | 41/41  | **slice B DONE WHEN**, and **all of slice D step 2**                                                     |
+| `pnpm test:smoke` | 34/34  | **slice C DONE WHEN**, and slice F's browser work                                                        |
+| `integrity.smoke` | 5/5    | **slice D DONE WHEN** — validate → verdict → evidence → chart, plus the clean twin. **Runs in CI** (A60) |
+| `data.smoke`      | 6/6    | Data page + spec 05's heatmap and waterfall (A61–A65)                                                    |
 
 **Slices A, B, C and D are DONE and verified.** Slice D's three steps — the validation engine, the
 API (`POST /backtests/:id/validate` + `/optimize` with SSE and cancel) and the "Integrity &
 Overfitting" tab — are all built, and its DONE WHEN has been met **in a real browser**: see
-"Slice D — verified" below. Slice E's currency layer is **done and hand-verified**; its
-Data page and dashboard work is not started. Slice F is built and browser-verified except the
+"Slice D — verified" below. Slice E's currency layer is **done and hand-verified**, and its
+**Data page is built and browser-verified** (A61–A64). Slice F is built and browser-verified except the
 deployment. See `docs/spec/08-roadmap.md` for the slices and `docs/decisions.md` for D1–D8, A1–A5
 and the verification-sprint findings, which override the specs.
 
@@ -253,8 +254,12 @@ at a 20% holdout: 185,122 bars unsealed, **147,580 sealed** (37,542 withheld), 0
 wholly inside the seal, and the view counter going 0 -> 1 on a deliberate unseal. `test:e2e` stays
 25/25 because an unsealed symbol reads exactly as before.
 
-> **Left to finish:** the `pnpm holdout` CLI (seal / status / drop) and a validation check that
-> reports "holdout viewed N times" in the report rather than only in the database.
+> **The holdout is now testable.** `POST /backtests/:id/holdout-test` runs the strategy on the sealed
+> range through `readM1Unsealed`, so the view is recorded before a bar is returned, and the
+> "Test on holdout" confirmation calls it (A59). Two defects surfaced on its first real run: the view
+> was counted against EVERY seal the symbol had ever had, retired ones included, and the report read a
+> per-client CACHE that a worker thread's write never invalidated — so it showed `0 -> 0` while the
+> database said `1`. Both fixed and covered by e2e assertions.
 
 **Walk-forward OPTIMIZATION is built and opt-in (A35)** — `pnpm optimize <runId> --inputs` prints the
 setup form prefilled from the script's `InputSpec`, `--spec <file>` runs it. Up to three inputs, an
@@ -443,16 +448,19 @@ bugs — the engine was handed account-currency capital (out by ~148x on JPY, so
 cancelled for margin and the run reported a clean zero) and the cross-check compared yen against
 dollars. Both fixed; see `docs/decisions.md`.
 
-The rest of slice E — the Data page and the dashboard completion — is not started.
+The Data page and the two missing dashboard visuals are done. What remains of slice E is nothing:
+its DONE WHEN items are met.
 
-| Piece                                                                                           | State                   |
-| ----------------------------------------------------------------------------------------------- | ----------------------- |
-| `conversion.ts` — pair, direction, rate lookup, missing data                                    | done, 20 tests          |
-| Wire it into `orchestrateRun`; remove the D6 guard                                              | **done, hand-verified** |
-| Data page (spec 02): provider cards, download form, drop-zone, coverage heatmap, candle preview | **not started**         |
-| Exercise Twelve Data and Binance on real data                                                   | **done**                |
-| Exness tick importer                                                                            | **NOT PLANNED** (A12)   |
-| Dashboard: monthly heatmap, cost waterfall, TV Sharpe on screen, JSON export, print stylesheet  | **not started**         |
+| Piece                                                                                           | State                      |
+| ----------------------------------------------------------------------------------------------- | -------------------------- |
+| `conversion.ts` — pair, direction, rate lookup, missing data                                    | done, 20 tests             |
+| Wire it into `orchestrateRun`; remove the D6 guard                                              | **done, hand-verified**    |
+| Data page (spec 02): provider cards, download form, drop-zone, coverage heatmap, candle preview | **done, browser-verified** |
+| Exercise Twelve Data and Binance on real data                                                   | **done**                   |
+| Exness tick importer                                                                            | **NOT PLANNED** (A12)      |
+| MT5 + generic CSV import from the browser (A63)                                                 | done, browser-verified     |
+| Dashboard: monthly heatmap + cost waterfall (A65)                                               | **done, browser-verified** |
+| Dashboard: TV Sharpe on screen, JSON export, print stylesheet                                   | done in slice F            |
 
 **Exness imports and the MT5 parity test are NOT PLANNED (A12).** No export has ever existed at
 `packages/data/fixtures/`, both directories are gitignored so vendor data stays local, and a

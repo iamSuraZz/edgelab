@@ -116,7 +116,7 @@ export function CandlePreview({
         <span className="text-xs text-muted">
           {fromMs === null ? 'no stored bars' : `${isoDay(fromMs)} → ${isoDay(toMs!)}`}
         </span>
-        <span className="text-xs tabular-nums text-muted">
+        <span className="text-xs tabular-nums text-muted" data-testid="preview-count">
           {candles.data === undefined ? '' : `${candles.data.count.toLocaleString()} bars`}
         </span>
         <button
