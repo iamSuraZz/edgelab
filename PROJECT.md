@@ -100,10 +100,10 @@ CI runs all five checks on every push — see `.github/workflows/ci.yml`.
 
 **Verified against the real docker stack:**
 
-| check             | result | covers                                            |
-| ----------------- | ------ | ------------------------------------------------- |
-| `pnpm test:e2e`   | 31/31  | **slice B DONE WHEN**, and step 2's validate job  |
-| `pnpm test:smoke` | 23/23  | **slice C DONE WHEN**, and slice F's browser work |
+| check             | result | covers                                               |
+| ----------------- | ------ | ---------------------------------------------------- |
+| `pnpm test:e2e`   | 36/36  | **slice B DONE WHEN**, and **all of slice D step 2** |
+| `pnpm test:smoke` | 23/23  | **slice C DONE WHEN**, and slice F's browser work    |
 
 **Slices A, B and C are DONE and verified.** **Slice D is IN PROGRESS — step 1 (validation engine
 
@@ -179,10 +179,12 @@ roadmap's "in the browser" is NOT met.
     Monte Carlo · Bar integrity · Trades within data window · Trade sample size
 
 Walk-forward optimisation (A35) sits beside them as an opt-in CLI check, because 1,204 engine runs
-cannot live in a suite that answers in seconds. **Step 2 is half done: `POST /backtests/:id/validate` is live with per-check SSE and
-cancel, results persist with their context (feed, data version, engine, seal id + view count,
-requested vs effective range), and `pnpm test:e2e` is 31/31. What remains is the OPTIMIZE endpoint
-and step 3 (the Integrity tab)** — after which the DONE WHEN, which
+cannot live in a suite that answers in seconds. **STEP 2 IS DONE.** Both `POST /backtests/:id/validate` and `POST /backtests/:id/optimize` run as
+jobs on one shared queue at concurrency 1 (A50), with SSE progress and cancel. Results persist with
+their context — feed, data version, engine, seal id and view count, requested vs effective range —
+and `GET /backtests/:id/validations`, `/optimizations` and `GET /validations/:id` serve them so the
+tab loads past results instead of re-running. `pnpm test:e2e` is **36/36**. **What remains for slice
+D is step 3, the Integrity tab** (spec saved verbatim to `docs/spec/06b-integrity-tab.md`) — after which the DONE WHEN, which
 requires this exercised in a browser, can be met for the first time. Each must run through `pnpm validate` on the 2022 data before the next
 starts. A24 records four constraints agreed ahead of those steps; A26 (trailing-stop replay), A30
 (regime mix in the OOS report) and A31 (spread on resting fills from the replay) are post-slice-D
@@ -358,7 +360,7 @@ keeping both layers: truncation covers unbounded leaks, splicing covers bounded 
 | OOS split, walk-forward, sealed holdout                   | **not started**             |
 | Timeframe matrix, regimes, Monte Carlo                    | **not started**             |
 | `POST /backtests/:id/validate` + SSE (step 2)             | **done, e2e 31/31**         |
-| `POST /backtests/:id/optimize` + SSE (step 2)             | **not started**             |
+| `POST /backtests/:id/optimize` + SSE (step 2)             | **done, e2e 36/36**         |
 | "Integrity & Overfitting" tab (step 3)                    | **not started**             |
 
 | Phase              | Core            | API                  | UI                   |
