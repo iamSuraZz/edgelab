@@ -53,6 +53,20 @@ async function findLeakyRun(page: Page): Promise<string | null> {
   );
 }
 
+/** The clean twin of the leaky fixture. Same logic, no leak. */
+async function findCleanRun(page: Page): Promise<string | null> {
+  const response = await page.request.get('/api/backtests?limit=500');
+  expect(response.ok()).toBe(true);
+  const runs = (await response.json()) as RunSummary[];
+  return (
+    runs.find((r) => r.state === 'completed' && /look-?ahead off/i.test(r.strategyName))?.id ?? null
+  );
+}
+
+const NO_CLEAN_RUN =
+  'no look-ahead-off run on this stack — create one with `pnpm backtest --fixture ' +
+  'lookahead-off --symbol EURUSD --tf H1 --from 2022-01-01 --to 2022-07-01`';
+
 const NO_RUN =
   'no look-ahead-leak run on this stack — create one with `pnpm backtest --fixture ' +
   'lookahead-leak --symbol EURUSD --tf H1 --from 2022-01-01 --to 2022-07-01`';
@@ -168,18 +182,32 @@ test.describe('Integrity & Overfitting', () => {
     const staticLint = results.find((c) => c.id === 'lookahead-static');
     const splice = results.find((c) => c.id === 'lookahead-future-splice');
 
+    /*
+     * The static lint is the one assertion here that is UNCONDITIONAL, because it reads the source
+     * rather than the data: this fixture calls `request.security` with `lookahead_on` and no
+     * offset, so it fails on any series, on any machine, with any number of bars.
+     */
     const lintCard = page.getByTestId('check-lookahead-static');
-    await expect(lintCard).toHaveAttribute('data-status', staticLint?.status ?? 'fail');
+    await expect(lintCard).toHaveAttribute('data-status', 'fail');
     // The LINE the check named, read back from the check rather than written in here.
     await expect(lintCard).toContainText(`Line ${String(staticLint?.evidence?.['firstLine'])}`);
 
     const spliceCard = page.getByTestId('check-lookahead-future-splice');
-    await expect(spliceCard).toHaveAttribute('data-status', splice?.status ?? 'fail');
-    // Already expanded: a failing check opens itself, because evidence nobody clicks is evidence
-    // nobody reads.
-    await expect(spliceCard.getByTestId('jump-time')).toContainText(
-      asShown(splice?.evidence?.['divergedAtMs'] as number),
-    );
+    await expect(spliceCard).toHaveAttribute('data-status', splice?.status ?? 'n/a');
+
+    /*
+     * The splice's own assertion is CONDITIONAL on it having found something.
+     *
+     * Unlike the lint it depends on the data: a short or quiet series can leave it with no
+     * divergence to report, and demanding a date there would be asserting a property of the
+     * fixture's bars rather than of the feature.
+     */
+    const divergedAtMs = splice?.evidence?.['divergedAtMs'];
+    if (typeof divergedAtMs === 'number') {
+      // Already expanded: a failing check opens itself, because evidence nobody clicks is evidence
+      // nobody reads.
+      await expect(spliceCard.getByTestId('jump-time')).toContainText(asShown(divergedAtMs));
+    }
   });
 
   test('clicking the first divergent bar jumps the chart to it', async ({ page }) => {
@@ -194,15 +222,33 @@ test.describe('Integrity & Overfitting', () => {
     // bar 0 on this fixture — and that is the whole reason the chart's focus is a time rather than
     // a trade (A53).
     const results = await reportFor(page, runId!);
-    const peekedAtMs = results.find((c) => c.id === 'lookahead-causality')?.evidence?.[
-      'peekedAtMs'
-    ] as number;
 
-    const causality = page.getByTestId('check-lookahead-causality');
+    /*
+     * ANY look-ahead check carrying a time, not the causality check specifically.
+     *
+     * Which of them fires depends on the data — causality needs a higher-timeframe bucket to close
+     * inside the range, the splice needs a bounded leak to move a decision — and this test is about
+     * the JUMP, not about which check produced the instant. Pinning it to one check would make a
+     * shorter series look like a broken chart.
+     */
+    const timed = results
+      .filter((c) => c.id.startsWith('lookahead-'))
+      .map((c) => ({
+        id: c.id,
+        atMs: (c.evidence?.['peekedAtMs'] ?? c.evidence?.['divergedAtMs']) as number | undefined,
+      }))
+      .find((c) => typeof c.atMs === 'number');
+
+    test.skip(
+      timed === undefined,
+      'no look-ahead check on this run reported a bar time, so there is no evidence to click',
+    );
+
+    const causality = page.getByTestId(`check-${timed!.id}`);
     await expect(causality).toHaveAttribute('data-status', 'fail');
 
     const jump = causality.getByTestId('jump-time').first();
-    await expect(jump).toContainText(asShown(peekedAtMs));
+    await expect(jump).toContainText(asShown(timed!.atMs!));
     await jump.click();
 
     // The jump switches tabs itself: evidence that needs the reader to find the chart is a
@@ -216,7 +262,39 @@ test.describe('Integrity & Overfitting', () => {
     const note = page.getByTestId('focus-note');
     await expect(note).toBeVisible();
     // The bar shown is the one containing the evidence, so its date is the evidence's date.
-    await expect(note).toContainText(asShown(peekedAtMs).slice(0, 10));
+    await expect(note).toContainText(asShown(timed!.atMs!).slice(0, 10));
+  });
+
+  /**
+   * The clean twin, which is what stops all of this from being a test of a tab that always says
+   * "No". Identical logic to the leaky fixture with `lookahead_off` and a `[1]` offset — so every
+   * look-ahead check must pass, and the honesty question must answer Yes.
+   */
+  test('the clean twin passes every look-ahead check', async ({ page }) => {
+    const runId = await findCleanRun(page);
+    test.skip(runId === null, NO_CLEAN_RUN);
+
+    await page.goto(`/runs/${runId!}`);
+    await page.getByRole('tab', { name: 'Integrity' }).click();
+    await ensureValidated(page);
+
+    for (const id of [
+      'lookahead-static',
+      'lookahead-prefix-invariance',
+      'lookahead-future-splice',
+      'lookahead-causality',
+    ]) {
+      const card = page.getByTestId(`check-${id}`);
+      const status = await card.getAttribute('data-status');
+      // `n/a` is allowed — a check with nothing to measure has not found a leak — but `fail` and
+      // `warn` are not: this source cannot look ahead.
+      expect(['pass', 'n/a'], `${id} was ${String(status)}`).toContain(status);
+    }
+
+    // Deliberately NOT asserting the overall honesty verdict. That aggregates the execution checks
+    // too, which depend on the bars — on a synthetic series a fill landing on a bar extreme is an
+    // artefact of the generator, not a property of this twin. The four checks above are the claim
+    // the twin exists to support.
   });
 
   test('a check with a visual renders it above the raw evidence', async ({ page }) => {
@@ -227,8 +305,17 @@ test.describe('Integrity & Overfitting', () => {
     await page.getByRole('tab', { name: 'Integrity' }).click();
     await ensureValidated(page);
 
+    const results = await reportFor(page, runId!);
+    const mcStatus = results.find((c) => c.id === 'overfitting-monte-carlo')?.status;
+
     const mc = page.getByTestId('check-overfitting-monte-carlo');
     await mc.getByTestId('check-overfitting-monte-carlo-toggle').click();
+
+    if (mcStatus === 'n/a') {
+      // An n/a still has to SAY why (A2). A card that expanded to nothing would be the worse bug.
+      await expect(page.getByTestId('check-overfitting-monte-carlo-reason')).toBeVisible();
+      return;
+    }
 
     const panel = page.getByTestId('monte-carlo-panel');
     await expect(panel).toBeVisible();

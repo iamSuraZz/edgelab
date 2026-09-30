@@ -99,11 +99,29 @@ jobs:
       # Synthetic, deterministic bars. The e2e and smoke suites both assert EURUSD has more than
       # 10,000 stored bars AND that a strategy actually trades, so an empty database or a flat
       # series fails them for reasons that look like engine bugs.
+      #
+      # TWO islands, deliberately. The 2024 month is what the e2e suite runs against and its
+      # assertions are written to it; the 2022 half-year is what the integrity smoke tests need,
+      # because the look-ahead checks that produce clickable evidence want a series long enough to
+      # splice and a higher-timeframe bucket to close inside it.
       - name: seed synthetic bars
-        run: pnpm run data:seed-synthetic EURUSD 2024-01-01 2024-02-01
+        run: |
+          pnpm run data:seed-synthetic EURUSD 2024-01-01 2024-02-01
+          pnpm run data:seed-synthetic EURUSD 2022-01-01 2022-07-01
 
       - name: test:e2e
         run: pnpm test:e2e -- --reporter=default --reporter=github-actions
+
+      # The runs the integrity smoke tests read. Without them those four tests SKIP — which is a
+      # green suite that asserted nothing, and was the state of CI until this step existed.
+      #
+      # Both fixtures, because the leaky one alone would only prove the tab can say "No". The clean
+      # twin is identical logic with `lookahead_off` and a `[1]` offset, so it must come back
+      # honest, and that pair is what makes the verdict mean something.
+      - name: create the integrity fixtures
+        run: |
+          pnpm backtest --fixture lookahead-leak --symbol EURUSD --tf H1 --from 2022-01-01 --to 2022-07-01
+          pnpm backtest --fixture lookahead-off --symbol EURUSD --tf H1 --from 2022-01-01 --to 2022-07-01
 
       - name: install chromium
         run: pnpm --filter @edgelab/web exec playwright install --with-deps chromium

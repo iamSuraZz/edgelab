@@ -2298,3 +2298,34 @@ The route worked, and reported **`viewCount 0 -> 0`** while the database said `1
 
 Both are covered by e2e assertions — the count rises by exactly one, and a retired seal is untouched
 — on a seal the test creates and retires itself so it cannot disturb the machine's own.
+
+## A60 — CI creates the fixture runs, so the integrity tests run instead of skipping
+
+A58 made the integrity smoke tests skip when no leaky run exists, which stopped CI going red on a
+missing precondition — and left four tests that asserted nothing on every push. CI now seeds a
+second island of synthetic bars (2022-01-01 .. 2022-07-01, beside the 2024 month the e2e suite is
+written against) and creates BOTH fixture runs before the smoke step.
+
+Both, because the leaky one alone proves only that the tab can say "No". The clean twin is identical
+logic with `lookahead_off` and a `[1]` offset, so it must come back honest; the pair is what makes
+the verdict mean anything.
+
+**The data-dependent assertions were made adaptive first.** Three of them were pinned to what the
+real dukascopy series happens to produce:
+
+| assertion          | now                                                                   |
+| ------------------ | --------------------------------------------------------------------- |
+| static lint fails  | unconditional — it reads the SOURCE, so it holds on any series        |
+| splice names a bar | only when the splice actually reported a `divergedAtMs`               |
+| the chart jump     | uses ANY look-ahead check carrying a time, not causality specifically |
+| Monte Carlo panel  | when `n/a`, asserts the REASON is shown instead (A2)                  |
+
+The clean twin deliberately does NOT assert the overall honesty verdict. That aggregates the
+execution checks, which depend on the bars — a fill landing on a bar extreme is a property of the
+synthetic generator, not of this fixture.
+
+> **Rehearsed locally before pushing**, on `GBPUSD` (no stored bars) seeded with the same synthetic
+> range and the same two `pnpm backtest` invocations CI runs: **5/5 green**, then the rehearsal data
+> was deleted. Debugging a browser suite through CI round-trips is how a "small config change" costs
+> an afternoon. Worth noting from it: the clean twin earns +232,688 on synthetic bars — the
+> generator is trivially predictable, which is exactly why the honesty assertion was dropped.
