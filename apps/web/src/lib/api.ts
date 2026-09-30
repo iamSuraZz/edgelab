@@ -668,6 +668,11 @@ export function startIngest(body: {
  * `FormData`, so no `content-type` is set by hand — the browser has to add the multipart boundary
  * and a hand-written header silently loses it, which the server sees as a malformed body.
  */
+/** Stop a running download. A job that already finished reports `already-finished`, not an error. */
+export function cancelIngest(jobId: string): Promise<{ jobId: string; action: string }> {
+  return request(`/data/ingest/${jobId}`, { method: 'DELETE' });
+}
+
 export function importFile(body: {
   file: File;
   symbol: string;

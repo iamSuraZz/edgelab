@@ -2362,3 +2362,29 @@ a green light at 40 requests left is a green light into a wall.
 application/json` whenever a body was present, which would have broken the file import — only the
 > browser can write a multipart `content-type`, because only it knows the boundary. A hand-written
 > header produces a body the server cannot parse and an error that reads "no file uploaded".
+
+## A62 — The download form derives its provider, and downloads can be stopped
+
+**A provider that cannot serve the symbol is not offered.** The list is filtered by the symbol's
+asset class, and the selected provider is DERIVED during render rather than stored:
+
+    const provider = usable.some((p) => p.id === preferred) ? preferred : usable[0]?.id ?? '';
+
+Storing it meant an effect correcting it after the symbol changed — a render cascade that eslint
+rejects outright, and a frame in which the form offered a combination the API would refuse. The
+API's refusal would have been correct and the UI would still have invited the mistake.
+
+**`DELETE /api/data/ingest/:jobId` was missing and is now there.** The worker has registered an
+`AbortController` per ingest job since slice A and checks it between pages; only the route was
+absent, so the Cancel button had nothing to call. A backfill is minutes long, and a download you
+cannot stop is one you avoid starting. A job already gone from the queue reports `already-finished`
+rather than 404 — it finished, which is what the caller wanted, and 404 there would make a
+successful download look like a failed cancel.
+
+Finishing a download invalidates coverage, symbols AND **providers**, because the credits changed
+too. Planning a backfill against a credit count you have already spent is the mistake the card
+exists to prevent.
+
+> **Verified in the browser** (spec 02's DONE WHEN, and this session's): EURUSD 2024-02-05 ..
+> 2024-02-12 from Dukascopy, progress visible from 1%, **7,187 bars** stored, coverage moving from
+> 2024-01-31 to 2024-02-11 without a reload.

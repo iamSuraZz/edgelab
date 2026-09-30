@@ -1,8 +1,9 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Loader2 } from 'lucide-react';
 
+import { DownloadForm } from '@/components/data/DownloadForm';
 import { ProviderCards } from '@/components/data/ProviderCards';
-import { listProviders } from '@/lib/api';
+import { listProviders, listSymbols } from '@/lib/api';
 
 /**
  * The Data page (spec 02).
@@ -11,7 +12,20 @@ import { listProviders } from '@/lib/api';
  * file instead, what do I now hold, and does it look right.
  */
 export function DataPage(): React.JSX.Element {
+  const queryClient = useQueryClient();
   const providers = useQuery({ queryKey: ['providers'], queryFn: listProviders });
+  const symbols = useQuery({ queryKey: ['symbols'], queryFn: listSymbols });
+
+  /*
+   * Refetch coverage AND providers after a download: the bars changed, and so did the provider's
+   * remaining credits. Showing a stale credit count right after spending some is how you plan a
+   * backfill against a budget you no longer have.
+   */
+  const refreshAfterDownload = (): void => {
+    void queryClient.invalidateQueries({ queryKey: ['coverage'] });
+    void queryClient.invalidateQueries({ queryKey: ['symbols'] });
+    void queryClient.invalidateQueries({ queryKey: ['providers'] });
+  };
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-auto" data-testid="data-page">
@@ -35,6 +49,17 @@ export function DataPage(): React.JSX.Element {
           </p>
         )}
         {providers.data !== undefined && <ProviderCards providers={providers.data} />}
+      </section>
+
+      <section className="space-y-2">
+        <h2 className="text-xs font-medium uppercase tracking-wide text-muted">Download</h2>
+        {providers.data !== undefined && symbols.data !== undefined && (
+          <DownloadForm
+            providers={providers.data}
+            symbols={symbols.data}
+            onFinished={refreshAfterDownload}
+          />
+        )}
       </section>
     </div>
   );

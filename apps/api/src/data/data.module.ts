@@ -5,6 +5,7 @@ import path from 'node:path';
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Inject,
   Injectable,
@@ -47,6 +48,7 @@ import {
   CandlesQuerySchema,
   DailyCountsQuerySchema,
   ImportRequestSchema,
+  jobCancelChannel,
   IngestRequestSchema,
   SymbolPatchBodySchema,
   type CandlesQuery,
@@ -217,6 +219,30 @@ export class DataService {
         return { ...caps, budget, blocked };
       }),
     );
+  }
+
+  /**
+   * Stop a running download.
+   *
+   * Out of band on the cancel channel, the same mechanism a backtest uses: the worker registers an
+   * `AbortController` per job and checks it between pages. A backfill is minutes long, and a
+   * download you cannot stop is one you avoid starting.
+   *
+   * A job already gone from the queue is NOT an error — it finished, which is what the caller
+   * wanted. Reporting 404 there would make a successful download look like a failed cancel.
+   */
+  async cancelIngest(jobId: string): Promise<{ jobId: string; action: string }> {
+    const job = await this.ingestQueue.getJob(jobId);
+    if (job === undefined) return { jobId, action: 'already-finished' };
+
+    const state = await job.getState();
+    if (state === 'waiting' || state === 'delayed' || state === 'prioritized') {
+      await job.remove();
+      return { jobId, action: 'removed-from-queue' };
+    }
+
+    await this.redis.publish(jobCancelChannel(jobId), '1');
+    return { jobId, action: 'abort-signalled' };
   }
 
   /** Per-day bar counts, for the calendar heatmap. */
@@ -391,6 +417,11 @@ export class DataController {
   @Get('candles')
   candles(@Query(new ZodPipe(CandlesQuerySchema)) query: CandlesQuery): Promise<CandleResponse> {
     return this.data.readCandles(query);
+  }
+
+  @Delete('data/ingest/:jobId')
+  cancelIngest(@Param('jobId') jobId: string): Promise<unknown> {
+    return this.data.cancelIngest(jobId);
   }
 
   @Get('data/providers')
