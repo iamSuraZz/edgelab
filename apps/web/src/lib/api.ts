@@ -50,8 +50,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     response = await fetch(`${BASE}${path}`, {
       ...init,
+      /*
+       * NOT set for FormData. The browser has to write the multipart `content-type` itself because
+       * only it knows the boundary; a hand-written `application/json` here silently produces a body
+       * the server cannot parse, and the error surfaces as "no file uploaded".
+       */
       headers:
-        init?.body === undefined
+        init?.body === undefined || init.body instanceof FormData
           ? init?.headers
           : { 'content-type': 'application/json', ...init?.headers },
     });
@@ -588,4 +593,91 @@ export function startOptimization(
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(spec),
   });
+}
+
+/* ------------------------------------------------------------------ data page */
+
+export interface ProviderCard {
+  readonly id: string;
+  readonly label: string;
+  readonly enabled: boolean;
+  /** Names the env var, never its value — the key never reaches the browser. */
+  readonly disabledReason?: string;
+  readonly requiresKey: boolean;
+  readonly providesSpread: boolean;
+  readonly assetClasses: readonly string[];
+  readonly historyNote?: string;
+  readonly rateLimit?: { readonly perMinute?: number; readonly perDay?: number };
+  readonly budget: {
+    readonly perMinute: number;
+    readonly perDay: number;
+    readonly minuteRemaining: number;
+    readonly dayRemaining: number;
+    readonly dayResetsAt: number;
+  } | null;
+  /** `SYMBOL: dukascopy blocked since <date>` lines, when a source keeps refusing (A11). */
+  readonly blocked: readonly string[];
+}
+
+export interface CoverageRow {
+  readonly symbolId: string;
+  readonly symbol: string;
+  readonly firstBar: number | null;
+  readonly lastBar: number | null;
+  readonly barCount: number;
+  readonly dataVersion: number;
+  readonly sources: readonly string[];
+  readonly blocked?: readonly string[];
+}
+
+export interface DayCount {
+  readonly day: number;
+  readonly bars: number;
+}
+
+export function listProviders(): Promise<ProviderCard[]> {
+  return request('/data/providers');
+}
+
+export function fetchCoverage(): Promise<CoverageRow[]> {
+  return request('/data/coverage');
+}
+
+export function fetchDailyCounts(
+  symbol: string,
+  fromMs: number,
+  toMs: number,
+): Promise<DayCount[]> {
+  const q = new URLSearchParams({ symbol, from: String(fromMs), to: String(toMs) });
+  return request(`/data/daily-counts?${q.toString()}`);
+}
+
+export function startIngest(body: {
+  symbol: string;
+  provider: string;
+  from: number;
+  to: number;
+  force?: boolean;
+}): Promise<{ jobId: string; queue: string; eventsUrl: string }> {
+  return request('/data/ingest', { method: 'POST', body: JSON.stringify(body) });
+}
+
+/**
+ * Upload a bar file.
+ *
+ * `FormData`, so no `content-type` is set by hand — the browser has to add the multipart boundary
+ * and a hand-written header silently loses it, which the server sees as a malformed body.
+ */
+export function importFile(body: {
+  file: File;
+  symbol: string;
+  format: string;
+  serverUtcOffsetMinutes: number;
+}): Promise<{ jobId?: string; inserted?: number; [k: string]: unknown }> {
+  const form = new FormData();
+  form.append('file', body.file);
+  form.append('symbol', body.symbol);
+  form.append('format', body.format);
+  form.append('serverUtcOffsetMinutes', String(body.serverUtcOffsetMinutes));
+  return request('/data/import', { method: 'POST', body: form });
 }

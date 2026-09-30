@@ -2335,3 +2335,30 @@ claim nothing checks.
 > was deleted. Debugging a browser suite through CI round-trips is how a "small config change" costs
 > an afternoon. Worth noting from it: the clean twin earns +232,688 on synthetic bars — the
 > generator is trivially predictable, which is exactly why the honesty assertion was dropped.
+
+## A61 — Provider cards report capability, credits and blockage, never the key
+
+`GET /api/data/providers` builds each card from the ADAPTER's own `capabilities()` rather than a
+list kept in the API, so a provider cannot advertise something its implementation does not do.
+
+The API constructs the adapters **without credentials**, purely to read that shape. `ConfigService`
+has no getter for the provider key by design (PROJECT.md's secrets rule), so the API cannot build a
+working Twelve Data client and does not pretend to: the adapter supplies the shape, config supplies
+PRESENCE, and only the key-dependent fields are overridden. What reaches the browser is `enabled`
+plus, when it is false, a `disabledReason` naming the environment VARIABLE — never a value.
+
+Three things on the card that a connected/not-connected badge would hide:
+
+| shown           | why                                                                                                                                                                        |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| credits left    | from the SAME Redis counters the fetcher spends, so it is the number that will refuse the next request — not an estimate of it                                             |
+| spread supplied | Binance and Twelve Data supply none, so their bars fall back to `defaultSpreadPoints` and their cost figures are not comparable with Dukascopy's. A property of the SOURCE |
+| blocked since   | A11: a source refusing for several nights running is blocked, not quiet, and a card that stays green while every nightly job fails is what A11 was written about           |
+
+Credits go amber under a fifth remaining and rose under a twentieth: a backfill needs headroom, and
+a green light at 40 requests left is a green light into a wall.
+
+> Fixing this exposed a latent bug in the web client: `request()` set `content-type:
+application/json` whenever a body was present, which would have broken the file import — only the
+> browser can write a multipart `content-type`, because only it knows the boundary. A hand-written
+> header produces a body the server cannot parse and an error that reads "no file uploaded".

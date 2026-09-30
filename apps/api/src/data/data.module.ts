@@ -20,6 +20,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { randomUUID } from 'node:crypto';
 
 import type { Queue } from 'bullmq';
+import type { Redis } from 'ioredis';
 import {
   blockedNotice,
   coverageForAll,
@@ -34,7 +35,14 @@ import {
   type DbClient,
   type StoredSymbol,
 } from '@edgelab/db';
-import { streamExnessZip, streamMt5Csv } from '@edgelab/data';
+import {
+  BinanceProvider,
+  DukascopyProvider,
+  RedisBudget,
+  TwelveDataProvider,
+  streamExnessZip,
+  streamMt5Csv,
+} from '@edgelab/data';
 import {
   CandlesQuerySchema,
   DailyCountsQuerySchema,
@@ -52,7 +60,8 @@ import {
 import { CandlesService, type CandleResponse } from '../candles/candles.service';
 import { ApiException } from '../common/api-error';
 import { ZodPipe } from '../common/zod.pipe';
-import { DB_CLIENT } from '../infra/infra.module';
+import { ConfigService } from '../config/config.service';
+import { DB_CLIENT, REDIS_CLIENT } from '../infra/infra.module';
 import { INGEST_QUEUE, QUEUE_NAME } from '../infra/queues.module';
 
 /**
@@ -74,6 +83,8 @@ export class DataService {
     @Inject(DB_CLIENT) private readonly db: DbClient,
     @Inject(INGEST_QUEUE) private readonly ingestQueue: Queue,
     @Inject(CandlesService) private readonly candles: CandlesService,
+    @Inject(REDIS_CLIENT) private readonly redis: Redis,
+    @Inject(ConfigService) private readonly config: ConfigService,
   ) {}
 
   /**
@@ -132,6 +143,78 @@ export class DataService {
           if (notice !== null) notices.push(notice);
         }
         return notices.length === 0 ? row : { ...row, blocked: notices };
+      }),
+    );
+  }
+
+  /**
+   * What each provider can do right now.
+   *
+   * Capabilities come from the adapters themselves rather than a list kept here, so a provider
+   * cannot claim in the UI something its implementation does not do. The KEY is never returned,
+   * only whether one is present (PROJECT.md's secrets rule) — `enabled` plus `disabledReason`
+   * names the env var, never its value.
+   *
+   * Twelve Data's remaining credits come from the same Redis counters the fetcher spends, so the
+   * figure on screen is the one that will actually refuse the next request rather than an estimate.
+   */
+  async providers(): Promise<unknown> {
+    /*
+     * Adapters constructed WITHOUT credentials, purely to read their capabilities.
+     *
+     * `ConfigService` has no getter for the provider key by design (PROJECT.md), so the API cannot
+     * build a working Twelve Data client and should not pretend to. The adapter supplies the shape
+     * — label, whether a key is needed, whether it carries spread, its rate limits — and config
+     * supplies PRESENCE, which is the only thing about the key this side is allowed to know.
+     */
+    const adapters = [
+      new DukascopyProvider({ cacheDir: this.config.dataCacheDir }),
+      new BinanceProvider(),
+      new TwelveDataProvider({ apiKey: '' }),
+    ];
+
+    const rows = await coverageForAll(this.db);
+    const keyPresent = this.config.providerConfigured;
+
+    return Promise.all(
+      adapters.map(async (adapter) => {
+        const declared = adapter.capabilities();
+        // Only the key-dependent fields are overridden, and only for the adapter that needs one.
+        const caps =
+          declared.requiresKey && keyPresent
+            ? { ...declared, enabled: true, disabledReason: undefined }
+            : declared;
+
+        /*
+         * "Blocked since" is reported per PROVIDER here, not per symbol as coverage does (A11).
+         * A provider rate-limited for three nights running is a fact about the source, and a card
+         * that stays cheerfully green while every nightly job fails is the thing that made A11
+         * necessary in the first place.
+         */
+        const blocked: string[] = [];
+        for (const row of rows) {
+          if (!row.sources.includes(caps.id)) continue;
+          const notice = blockedNotice(
+            caps.id,
+            await rateLimitStreak(this.db, row.symbolId, caps.id),
+          );
+          if (notice !== null) blocked.push(`${row.symbol}: ${notice}`);
+        }
+
+        /*
+         * The SAME counters the fetcher spends, so the number on screen is the one that will refuse
+         * the next request — not an estimate of it. Meaningless without a key, hence null.
+         */
+        const limits = caps.rateLimit;
+        const budget =
+          caps.enabled && limits?.perMinute !== undefined && limits.perDay !== undefined
+            ? await new RedisBudget(this.redis, caps.id, {
+                perMinute: limits.perMinute,
+                perDay: limits.perDay,
+              }).status()
+            : null;
+
+        return { ...caps, budget, blocked };
       }),
     );
   }
@@ -308,6 +391,11 @@ export class DataController {
   @Get('candles')
   candles(@Query(new ZodPipe(CandlesQuerySchema)) query: CandlesQuery): Promise<CandleResponse> {
     return this.data.readCandles(query);
+  }
+
+  @Get('data/providers')
+  providers(): Promise<unknown> {
+    return this.data.providers();
   }
 
   @Get('data/coverage')
