@@ -8,6 +8,7 @@ import {
   readRun,
   type DbClient,
   type SealTruncation,
+  type ValidationContext,
 } from '@edgelab/db';
 import { PineTsEngine, orchestrateRun, parsePineTimeframe, spreadPriceAt } from '@edgelab/engine';
 import type { SecurityCall } from '@edgelab/engine';
@@ -214,6 +215,15 @@ export interface ValidationReport {
   readonly regimes: RegimeBreakdown | null;
   readonly matrix: TimeframeMatrixResult | null;
   readonly monteCarlo: MonteCarloResult | null;
+  /**
+   * What this validation actually saw.
+   *
+   * Reported by the runner rather than assembled by its caller, because every field is something
+   * only the run itself observed: which feed the guard resolved, the holdout's view count at that
+   * moment, and whether a seal cut the range. A caller reconstructing them later could read
+   * different values and attach them to the same verdict.
+   */
+  readonly context: ValidationContext;
   readonly elapsedMs: number;
 }
 
@@ -554,7 +564,7 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
 
   /* ------------------------------------------ cost stress (spec 06 §2) */
 
-  report(92, 'stressing costs');
+  report(91, 'stressing costs');
 
   // Scale spread, slippage and financing together. Slippage has to go through the ENGINE, because
   // it moves a fill price and so changes which orders survive a margin check — which is exactly the
@@ -628,7 +638,7 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
 
   /* --------------------------------------------- OOS split (spec 06 §3) */
 
-  report(95, 'out-of-sample split');
+  report(93, 'out-of-sample split');
 
   const splitMs = splitInstant(run.fromMs, run.toMs, OOS_SPLIT_FRACTION);
 
@@ -662,7 +672,7 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
 
   /* ----------------------------------------- walk-forward (spec 06 §3) */
 
-  report(97, 'rolling out-of-sample');
+  report(95, 'rolling out-of-sample');
 
   // Rolling folds, each half its own run from the same starting capital — the same A24 reasoning as
   // the OOS split, applied repeatedly. Cost is known rather than guessed (A3): setup is a flat
@@ -681,7 +691,7 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
 
   /* --------------------------------------------- regimes (spec 06 §3) */
 
-  report(98, 'regimes');
+  report(96, 'regimes');
 
   // D1 sessions on the NEW YORK close (A41), not the Exness 00:00 UTC day. The Exness day adds a
   // two-hour Sunday stub to every week, which shortens SMA(200)'s real span by a sixth and drags
@@ -707,7 +717,7 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
 
   /* --------------------------------------- timeframe matrix (spec 06 §3) */
 
-  report(99, 'timeframe matrix');
+  report(97, 'timeframe matrix');
 
   // The requested timeframes come from the causality log, so the n/a rule is applied to what the
   // script actually asks for rather than to a guess from its text (A40).
@@ -768,7 +778,7 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
 
   /* ------------------------------------------- Monte Carlo (spec 06 §3) */
 
-  report(99, 'monte carlo');
+  report(98, 'monte carlo');
 
   // The sizing mode is READ, not guessed (A43): `default_qty_type` is a declared strategy property,
   // and a run-level override wins over the script's own declaration the same way it does for the
@@ -797,11 +807,15 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
 
   /* --------------------------------------------------------- the checks */
 
-  report(90, 'judging');
+  report(99, 'judging');
+
+  // Read once and reused: the check renders it, and the stored context records WHICH seal this
+  // verdict was obtained under and how many times it had been viewed by then.
+  const activeHoldout = await getHoldout(params.db, symbolRow.id);
 
   const results: CheckResult[] = [
     holdoutResult(
-      await getHoldout(params.db, symbolRow.id),
+      activeHoldout,
       await holdoutHistory(params.db, symbolRow.id),
       // From the RUN RECORD, not from this validation's own read. The stored range is already the
       // effective one (A40), so re-reading it is never truncated — the fact that the original
@@ -880,6 +894,19 @@ export async function validateRun(params: ValidateRunParams): Promise<Validation
     regimes,
     matrix,
     monteCarlo,
+    context: {
+      feed,
+      dataVersion: symbolRow.dataVersion,
+      // From the ENGINE, not the run result: a verdict is only reproducible against the engine
+      // that produced it, and the adapter is what knows its own version.
+      engineId: engine.id,
+      engineVersion: engine.engineVersion,
+      holdoutId: activeHoldout?.id ?? null,
+      holdoutViewCount: activeHoldout?.viewCount ?? null,
+      rangeFromMs: run.fromMs,
+      rangeToMs: run.toMs,
+      requestedRangeToMs: run.requestedToMs,
+    },
     elapsedMs: Date.now() - startedAt,
   };
 }

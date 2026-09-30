@@ -23,7 +23,10 @@ async function main(): Promise<void> {
   const handle = startWorkers(env);
   await handle.ready();
 
-  console.log(`worker: listening on ${QUEUE_NAMES.backtest}, ${QUEUE_NAMES.ingest}`);
+  console.log(
+    `worker: listening on ${QUEUE_NAMES.backtest}, ${QUEUE_NAMES.ingest}, ` +
+      `${QUEUE_NAMES.validation}`,
+  );
   console.log(
     `worker: piscina threads=${String(handle.pool.stats.threads)} ` +
       `timeout=${String(handle.pool.stats.timeoutMs / 1000)}s ` +

@@ -403,6 +403,114 @@ describe('the full backtest chain over HTTP', () => {
     expect(body.code).toBe('job-not-cancellable');
     expect(body.message).toContain('already finished');
   });
+
+  describe('POST /backtests/:id/validate', () => {
+    let validationId: string;
+    let validationJobId: string;
+
+    it('refuses a run that has not finished', async () => {
+      // Validation re-executes the strategy and compares against the stored result; a run still in
+      // flight has no stored result to compare against.
+      const { body: created } = await apiPost<{ runId: string }>(harness, '/backtests', {
+        source: FIXTURE.source,
+        name: 'E2E unfinished',
+        ...RUN_CONFIG,
+      });
+
+      const { status, body } = await apiPost<ApiError>(
+        harness,
+        `/backtests/${created.runId}/validate`,
+        {},
+      );
+
+      // Either it was still queued (refused) or the worker beat us to it (accepted). Both are
+      // correct; what must never happen is a 500.
+      expect([201, 409]).toContain(status);
+      if (status === 409) expect(body.message).toContain('completed run');
+    });
+
+    it('accepts a completed run and returns ids to poll', async () => {
+      const { status, body } = await apiPost<{ validationId: string; jobId: string }>(
+        harness,
+        `/backtests/${runId}/validate`,
+        {},
+      );
+
+      expect(status).toBe(201);
+      expect(body.validationId).toBeTruthy();
+      validationId = body.validationId;
+      validationJobId = body.jobId;
+    });
+
+    it('streams per-check progress over SSE and ends on completion', async () => {
+      const outcome = await followJobEvents(harness, validationJobId);
+
+      expect(outcome.final.state, `validation failed: ${outcome.final.error ?? ''}`).toBe(
+        'completed',
+      );
+      expect(outcome.final.percent).toBe(100);
+
+      const percents = outcome.events.map((e) => e.percent);
+      expect([...percents].sort((a, b) => a - b)).toEqual(percents);
+
+      // Intermediate progress is what proves the per-check reporting is wired, not just start/end.
+      expect(outcome.events.some((e) => e.percent > 5 && e.percent < 100)).toBe(true);
+    }, 180_000);
+
+    it('stores the report with the CONTEXT it ran under', async () => {
+      const { status, body } = await apiGet<{
+        state: string;
+        verdict: string;
+        report: { results: { id: string; status: string }[] };
+        context: {
+          feed: string | null;
+          dataVersion: number | null;
+          engineId: string | null;
+          engineVersion: string | null;
+          holdoutId: string | null;
+          rangeFromMs: number | null;
+          rangeToMs: number | null;
+        };
+      }>(harness, `/validations/${validationId}`);
+
+      expect(status).toBe(200);
+      expect(body.state).toBe('completed');
+      expect(['pass', 'warn', 'fail', 'inconclusive']).toContain(body.verdict);
+
+      // Every check ran, and each carries a status the UI can render.
+      expect(body.report.results.length).toBeGreaterThanOrEqual(15);
+      for (const r of body.report.results) {
+        expect(['pass', 'warn', 'fail', 'n/a']).toContain(r.status);
+      }
+
+      // The context is what makes the verdict interpretable later.
+      expect(body.context.feed).toBeTruthy();
+      expect(body.context.engineId).toBeTruthy();
+      expect(body.context.engineVersion).toBeTruthy();
+      expect(body.context.rangeFromMs).toBe(RUN_CONFIG.from);
+      expect(body.context.dataVersion).not.toBeNull();
+    });
+
+    it('lists past results for the run without their reports', async () => {
+      const { status, body } = await apiGet<
+        { id: string; kind: string; state: string; verdict: string | null; report?: unknown }[]
+      >(harness, `/backtests/${runId}/validations`);
+
+      expect(status).toBe(200);
+      expect(body.length).toBeGreaterThanOrEqual(1);
+      expect(body[0]!.kind).toBe('validation');
+      // The list is for headlines; the report is fetched only when a card is opened.
+      expect(body[0]!.report).toBeUndefined();
+    });
+
+    it('404s an unknown validation id rather than returning null', async () => {
+      const { status } = await apiGet<ApiError>(
+        harness,
+        '/validations/00000000-0000-0000-0000-000000000000',
+      );
+      expect(status).toBe(404);
+    });
+  });
 });
 
 describe('errors name the real reason', () => {

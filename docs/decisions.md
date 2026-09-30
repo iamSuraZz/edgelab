@@ -1949,3 +1949,35 @@ thing.
 
 The 95th-percentile drawdown is now named explicitly as the figure to size around: the backtest
 showed one ordering, and sizing from its curve is sizing from that draw.
+
+## A49 · Step 2, part one: the validation endpoint
+
+`POST /backtests/:id/validate` enqueues the suite on the existing BullMQ plumbing,
+`GET /backtests/:id/validations` lists past results, `GET /validations/:id` fetches one with its
+report, and `DELETE /validations/:id/job` cancels through the same out-of-band Redis channel the
+backtest cancel uses.
+
+**The job runs in the worker process, not a piscina thread.** That breaks the pattern the backtest
+job set, deliberately: `validateRun` performs about thirty engine runs of its own and the timeframe
+matrix dispatches more, so putting it in a pool thread would have a pool task spawning pool tasks.
+Its CPU cost is already bounded by the pool those inner runs use. Concurrency is 1 for the same
+reason — two validations at once would contend for that pool and finish slower than in sequence.
+
+**A completed run is required.** Validation re-executes the strategy and compares against the stored
+result; a run still in flight has no stored result to compare against.
+
+**The stored context is reported BY the run, not assembled by the job.** Feed, data version, engine
+id and version, the seal in force with its view count AT THAT MOMENT, and the effective range with
+the requested one beside it. Every one of those can change under a run while its id stays the same,
+so a caller reconstructing them later could attach different values to the same verdict. The list
+endpoint omits the report, which is large; the tab renders headlines from the summary columns and
+fetches a report only when a card is opened.
+
+**The e2e caught a real defect: progress went backwards.** `report(90, 'judging')` was written when
+judging WAS the last step, and every check added since landed after it — so the bar ran
+99 -> 90 -> 100. Then a second, subtler one: the splice loop already reports up to 90, so numbering
+the new checks from 86 put them underneath it. Renumbered to 91-99, and `pnpm test:e2e` asserts
+monotonicity the same way it does for a backtest, because a bar that jumps backwards is worse than
+no bar.
+
+Now 31/31 against the real stack.

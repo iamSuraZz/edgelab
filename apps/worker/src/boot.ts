@@ -9,6 +9,7 @@ import { processBacktestJob, type BacktestJobData } from './jobs/backtest-job';
 import { CancellationWatcher } from './jobs/cancellation';
 import { JobEventPublisher } from './jobs/events';
 import { IngestCancelled, processIngestJob, type IngestJobData } from './jobs/ingest-job';
+import { processValidationJob, type ValidationJobData } from './jobs/validation-job';
 import { TaskPool } from './pool/pool';
 import { QUEUE_NAMES, createWorker } from './queues';
 
@@ -71,7 +72,19 @@ export function startWorkers(env: Env, options: StartWorkersOptions = {}): Worke
     { concurrency: 2 },
   );
 
-  const workers = [backtestWorker, ingestWorker];
+  /*
+   * Concurrency 1, and lower than the backtest worker's for a reason: one validation is already
+   * about thirty engine runs plus a timeframe matrix, so two at once would contend for the same
+   * piscina pool the inner runs use and make both slower than running them in sequence.
+   */
+  const validationWorker = createWorker(
+    QUEUE_NAMES.validation,
+    env.REDIS_URL,
+    (job: Job) => processValidationJob(job as Job<ValidationJobData>, { db, events, cancellation }),
+    { concurrency: 1 },
+  );
+
+  const workers = [backtestWorker, ingestWorker, validationWorker];
 
   for (const worker of workers) {
     worker.on('failed', (job, err) => {

@@ -286,6 +286,57 @@ export const backtestRuns = pgTable(
  * Keyed on (run_id, seq) rather than a surrogate id: seq is already unique within a run and is
  * what the report, the chart markers and the CSV export all refer to.
  */
+
+/**
+ * A stored validation or optimisation result.
+ *
+ * The CONTEXT columns are the point. A verdict means nothing a month later without knowing which
+ * feed it ran on, which engine produced it, whether a holdout was sealed at the time and how many
+ * times that seal had been viewed, and whether the range it covered was the range requested. Every
+ * one of those can change under a run while its id stays the same, and a result that cannot say
+ * which it saw is a number without a claim attached.
+ */
+export const validationRuns = pgTable(
+  'validation_runs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    runId: uuid('run_id')
+      .notNull()
+      .references(() => backtestRuns.id, { onDelete: 'cascade' }),
+    /** `validation` for the 17-check suite, `optimization` for walk-forward. */
+    kind: text('kind').notNull(),
+    /** queued | running | completed | failed | cancelled */
+    state: text('state').notNull().default('queued'),
+    /** pass | warn | fail | inconclusive — null until it completes. */
+    verdict: text('verdict'),
+    /** The whole report, as the checks produced it. */
+    report: jsonb('report'),
+    /** For an optimisation, the spec it ran. Null for a validation. */
+    spec: jsonb('spec'),
+
+    /* ---------------------------------------------------------- context */
+    /** Which feed the bars came from. A result on dukascopy is not a result on twelvedata. */
+    feed: text('feed'),
+    /** `symbols.data_version`, bumped whenever stored bars change under a symbol. */
+    dataVersion: integer('data_version'),
+    engineId: text('engine_id'),
+    engineVersion: text('engine_version'),
+    /** The seal in force, and its view count AT THE TIME. Both null when nothing was sealed. */
+    holdoutId: uuid('holdout_id'),
+    holdoutViewCount: integer('holdout_view_count'),
+    /** What actually ran, and what was asked for when a seal cut it short. */
+    rangeFrom: timestamp('range_from', { withTimezone: true }),
+    rangeTo: timestamp('range_to', { withTimezone: true }),
+    requestedRangeTo: timestamp('requested_range_to', { withTimezone: true }),
+
+    error: text('error'),
+    elapsedMs: integer('elapsed_ms'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+  },
+  (t) => [index('validation_runs_run_idx').on(t.runId, t.createdAt)],
+);
+
 export const runTrades = pgTable(
   'run_trades',
   {

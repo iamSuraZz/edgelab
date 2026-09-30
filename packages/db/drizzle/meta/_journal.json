@@ -50,6 +50,13 @@
       "when": 1790616345235,
       "tag": "0006_aberrant_wrecker",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1790775515193,
+      "tag": "0007_lethal_sabretooth",
+      "breakpoints": true
     }
   ]
 }

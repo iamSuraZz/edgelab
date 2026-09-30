@@ -26,6 +26,9 @@ import {
   upsertStrategyVersion,
   type DbClient,
   type RunDetailRow,
+  createValidation,
+  listValidations,
+  readValidation,
 } from '@edgelab/db';
 import { PINETS_VERSION } from '@edgelab/engine';
 import {
@@ -45,7 +48,7 @@ import {
 import { ApiException } from '../common/api-error';
 import { ZodPipe } from '../common/zod.pipe';
 import { DB_CLIENT, REDIS_CLIENT } from '../infra/infra.module';
-import { BACKTEST_QUEUE, QUEUE_NAME } from '../infra/queues.module';
+import { BACKTEST_QUEUE, QUEUE_NAME, VALIDATION_QUEUE } from '../infra/queues.module';
 import { PineModule, PineService } from '../pine/pine.module';
 import { buyAndHoldCurve, downsampleEquity } from './series';
 
@@ -62,6 +65,7 @@ export class BacktestsService {
   constructor(
     @Inject(DB_CLIENT) private readonly db: DbClient,
     @Inject(BACKTEST_QUEUE) private readonly queue: Queue,
+    @Inject(VALIDATION_QUEUE) private readonly validationQueue: Queue,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     @Inject(PineService) private readonly pine: PineService,
   ) {}
@@ -433,6 +437,59 @@ export class BacktestsService {
     return { runId: run.id, jobId: run.queueJobId, action: 'abort-signalled' };
   }
 
+  /**
+   * Start the seventeen-check suite over a stored run.
+   *
+   * A finished run is required: validating one still in flight would re-execute a strategy whose
+   * own result is not yet written, and the two could disagree about the range for no reason the
+   * report could explain.
+   */
+  async validate(runId: string): Promise<{ validationId: string; jobId: string }> {
+    const run = await this.requireRun(runId);
+    if (run.state !== 'completed') {
+      throw ApiException.conflict(
+        `Run ${run.id} is ${run.state}. Validation needs a completed run: the checks re-execute ` +
+          `the strategy and compare against its stored result.`,
+      );
+    }
+
+    const validationId = await createValidation(this.db, { runId: run.id, kind: 'validation' });
+    const job = await this.validationQueue.add(QUEUE_NAME.validation, {
+      validationId,
+      runId: run.id,
+    });
+
+    return { validationId, jobId: String(job.id) };
+  }
+
+  /** Past validations for a run, newest first, without their reports. */
+  async validations(runId: string): Promise<unknown> {
+    await this.requireRun(runId);
+    return listValidations(this.db, runId, 'validation');
+  }
+
+  /** One stored result, with its full report and the context it ran under. */
+  async validation(id: string): Promise<unknown> {
+    const row = await readValidation(this.db, id);
+    if (row === null) throw ApiException.notFound(`No validation with id ${id}.`);
+    return row;
+  }
+
+  async cancelValidation(id: string): Promise<{ validationId: string; action: string }> {
+    const row = await readValidation(this.db, id);
+    if (row === null) throw ApiException.notFound(`No validation with id ${id}.`);
+
+    if (row.state !== 'queued' && row.state !== 'running') {
+      throw ApiException.notCancellable(
+        `Validation ${id} already finished (${row.state}), so there is nothing to cancel.`,
+      );
+    }
+
+    // Same out-of-band route the backtest cancel uses: BullMQ cannot reach a running processor.
+    await this.redis.publish(jobCancelChannel(id), '1');
+    return { validationId: id, action: 'abort-signalled' };
+  }
+
   private async requireRun(runId: string): Promise<RunDetailRow> {
     const run = await readRun(this.db.db, runId);
     if (run === null) throw ApiException.notFound(`No backtest run with id ${runId}.`);
@@ -477,16 +534,48 @@ export class BacktestsController {
     return this.backtests.series(id, query);
   }
 
+  @Post(':id/validate')
+  validate(@Param('id') id: string): Promise<unknown> {
+    return this.backtests.validate(id);
+  }
+
+  @Get(':id/validations')
+  validations(@Param('id') id: string): Promise<unknown> {
+    return this.backtests.validations(id);
+  }
+
   @Delete(':id/job')
   cancel(@Param('id') id: string): Promise<unknown> {
     return this.backtests.cancel(id);
   }
 }
 
+/**
+ * Stored validation results, addressed by their own id.
+ *
+ * A separate top-level resource rather than nested under the run, because a result outlives the
+ * question "which run produced it" — the tab links to one directly, and a report is fetched by id
+ * without needing to know its run.
+ */
+@Controller('validations')
+export class ValidationsController {
+  constructor(@Inject(BacktestsService) private readonly backtests: BacktestsService) {}
+
+  @Get(':id')
+  get(@Param('id') id: string): Promise<unknown> {
+    return this.backtests.validation(id);
+  }
+
+  @Delete(':id/job')
+  cancel(@Param('id') id: string): Promise<unknown> {
+    return this.backtests.cancelValidation(id);
+  }
+}
+
 @Module({
   // BacktestsService compiles the source before enqueuing, so it needs PineService.
   imports: [PineModule],
-  controllers: [BacktestsController],
+  controllers: [BacktestsController, ValidationsController],
   providers: [BacktestsService],
   exports: [BacktestsService],
 })

@@ -16,10 +16,12 @@ import { REDIS_CLIENT } from './infra.module';
 
 export const BACKTEST_QUEUE = Symbol('BACKTEST_QUEUE');
 export const INGEST_QUEUE = Symbol('INGEST_QUEUE');
+export const VALIDATION_QUEUE = Symbol('VALIDATION_QUEUE');
 
 export const QUEUE_NAME = {
   backtest: 'backtest',
   ingest: 'ingest',
+  validation: 'validation',
 } as const;
 
 /** Mirrors the worker's DEFAULT_JOB_OPTIONS. */
@@ -43,10 +45,11 @@ export class QueuesLifecycle implements OnApplicationShutdown {
   constructor(
     @Inject(BACKTEST_QUEUE) private readonly backtest: Queue,
     @Inject(INGEST_QUEUE) private readonly ingest: Queue,
+    @Inject(VALIDATION_QUEUE) private readonly validation: Queue,
   ) {}
 
   async onApplicationShutdown(): Promise<void> {
-    await Promise.allSettled([this.backtest.close(), this.ingest.close()]);
+    await Promise.allSettled([this.backtest.close(), this.ingest.close(), this.validation.close()]);
   }
 }
 
@@ -74,6 +77,12 @@ export type RedisSubscriberFactory = () => Redis;
       useFactory: (config: ConfigService): Queue => makeQueue(QUEUE_NAME.ingest, config.redisUrl),
     },
     {
+      provide: VALIDATION_QUEUE,
+      inject: [ConfigService],
+      useFactory: (config: ConfigService): Queue =>
+        makeQueue(QUEUE_NAME.validation, config.redisUrl),
+    },
+    {
       provide: REDIS_SUBSCRIBER_FACTORY,
       inject: [REDIS_CLIENT],
       // Duplicating the configured client rather than building a new one from the url keeps
@@ -98,6 +107,6 @@ export type RedisSubscriberFactory = () => Redis;
     },
     QueuesLifecycle,
   ],
-  exports: [BACKTEST_QUEUE, INGEST_QUEUE, REDIS_SUBSCRIBER_FACTORY],
+  exports: [BACKTEST_QUEUE, INGEST_QUEUE, VALIDATION_QUEUE, REDIS_SUBSCRIBER_FACTORY],
 })
 export class QueuesModule {}
