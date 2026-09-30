@@ -2324,6 +2324,12 @@ The clean twin deliberately does NOT assert the overall honesty verdict. That ag
 execution checks, which depend on the bars — a fill landing on a bar extreme is a property of the
 synthetic generator, not of this fixture.
 
+**And the skip is disallowed in CI.** A workflow step creating the runs still leaves a green suite
+if that step silently stops working — a skipped test and a passing one are the same colour. So the
+absence of a fixture run is a SKIP locally (not every machine carries one) and an ERROR under `CI`,
+naming the command that should have created it. Without that, "CI runs the integrity tests" is a
+claim nothing checks.
+
 > **Rehearsed locally before pushing**, on `GBPUSD` (no stored bars) seeded with the same synthetic
 > range and the same two `pnpm backtest` invocations CI runs: **5/5 green**, then the rehearsal data
 > was deleted. Debugging a browser suite through CI round-trips is how a "small config change" costs

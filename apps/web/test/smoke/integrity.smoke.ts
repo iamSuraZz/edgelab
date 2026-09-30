@@ -63,6 +63,23 @@ async function findCleanRun(page: Page): Promise<string | null> {
   );
 }
 
+/**
+ * In CI the fixture runs are created by a workflow step, so their absence is a BROKEN PIPELINE.
+ *
+ * Skipping there would leave a green suite that asserted nothing — which is the state this file was
+ * in until the workflow created them, and is indistinguishable from passing unless it is made an
+ * error. Locally a skip is right: not every machine carries a leaky run.
+ */
+const IN_CI = process.env['CI'] === 'true';
+
+/** Skip locally, fail in CI, with the command that would create the run either way. */
+function requireRunOrSkip(runId: string | null, hint: string): void {
+  if (runId !== null) return;
+  if (IN_CI)
+    expect(runId, `CI must create this run before the smoke suite: ${hint}`).not.toBeNull();
+  test.skip(true, hint);
+}
+
 const NO_CLEAN_RUN =
   'no look-ahead-off run on this stack — create one with `pnpm backtest --fixture ' +
   'lookahead-off --symbol EURUSD --tf H1 --from 2022-01-01 --to 2022-07-01`';
@@ -139,7 +156,7 @@ test.describe('Integrity & Overfitting', () => {
     page,
   }) => {
     const runId = await findLeakyRun(page);
-    test.skip(runId === null, NO_RUN);
+    requireRunOrSkip(runId, NO_RUN);
 
     await page.goto(`/runs/${runId!}`);
     await page.getByRole('tab', { name: 'Integrity' }).click();
@@ -172,7 +189,7 @@ test.describe('Integrity & Overfitting', () => {
     page,
   }) => {
     const runId = await findLeakyRun(page);
-    test.skip(runId === null, NO_RUN);
+    requireRunOrSkip(runId, NO_RUN);
 
     await page.goto(`/runs/${runId!}`);
     await page.getByRole('tab', { name: 'Integrity' }).click();
@@ -212,7 +229,7 @@ test.describe('Integrity & Overfitting', () => {
 
   test('clicking the first divergent bar jumps the chart to it', async ({ page }) => {
     const runId = await findLeakyRun(page);
-    test.skip(runId === null, NO_RUN);
+    requireRunOrSkip(runId, NO_RUN);
 
     await page.goto(`/runs/${runId!}`);
     await page.getByRole('tab', { name: 'Integrity' }).click();
@@ -272,7 +289,7 @@ test.describe('Integrity & Overfitting', () => {
    */
   test('the clean twin passes every look-ahead check', async ({ page }) => {
     const runId = await findCleanRun(page);
-    test.skip(runId === null, NO_CLEAN_RUN);
+    requireRunOrSkip(runId, NO_CLEAN_RUN);
 
     await page.goto(`/runs/${runId!}`);
     await page.getByRole('tab', { name: 'Integrity' }).click();
@@ -299,7 +316,7 @@ test.describe('Integrity & Overfitting', () => {
 
   test('a check with a visual renders it above the raw evidence', async ({ page }) => {
     const runId = await findLeakyRun(page);
-    test.skip(runId === null, NO_RUN);
+    requireRunOrSkip(runId, NO_RUN);
 
     await page.goto(`/runs/${runId!}`);
     await page.getByRole('tab', { name: 'Integrity' }).click();
