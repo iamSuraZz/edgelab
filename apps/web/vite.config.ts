@@ -43,6 +43,7 @@ export default defineConfig(({ mode }) => {
          */
         '@edgelab/shared': path.resolve(repoRoot, 'packages/shared/src/index.ts'),
         '@edgelab/metrics': path.resolve(repoRoot, 'packages/metrics/src/index.ts'),
+        '@edgelab/validation': path.resolve(repoRoot, 'packages/validation/src/index.ts'),
       },
     },
     server: {

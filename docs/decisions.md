@@ -2022,3 +2022,34 @@ reached 100 before the work finished would be worse than one arriving slightly l
 `pnpm test:e2e` is now **36/36**, covering both jobs: the grid size reported before starting, an
 impossible spec refused, monotonic progress on the shared queue, and the stored result carrying its
 fold table, parameter drift and the spec it swept.
+
+## A52 · The header answers two questions, not one
+
+The report shows two separate answers rather than a single verdict.
+
+**"Is this backtest honest?"** — the critical checks: look-ahead, execution realism, data integrity,
+and the holdout. This has a verdict, because it is a question with an answer: pass, fail, or
+Inconclusive when a critical check could not run and therefore cleared nothing.
+
+**"Does the edge hold up?"** — the robustness checks: OOS split, rolling out-of-sample, regimes,
+timeframe matrix, Monte Carlo, and walk-forward optimisation where present. These get COUNTS of
+pass/warn/fail/n·a and deliberately no combined score.
+
+A lone "Pass" badge on a losing strategy reads as an endorsement. The checks are saying "we found no
+lying"; a reader sees "approved". Splitting the questions makes the first badge mean exactly what it
+measures, and leaves the second as a list that has to be read. The passing headline says so
+explicitly: *"no look-ahead, and execution is modelled realistically. This says nothing about whether
+the strategy is any good."*
+
+**No combined robustness score, on purpose.** There is no honest way to average "profitable in 2 of 4
+timeframes" against "15% of bootstrap resamples lose money", and any weighting invented to do it
+would be a judgement smuggled in as arithmetic. The counts are the summary.
+
+**The holdout is an HONESTY check despite its `overfitting-` id.** A viewed holdout does not mean the
+edge is fragile — it means this particular claim is weaker evidence than it appears, which is a
+statement about the result's standing rather than about the strategy.
+
+The split lives in `packages/validation/src/two-questions.ts` and is derived from check ids, so a new
+check lands on the right side by being named consistently and an unrecognised one surfaces as
+`unclassified` rather than being silently dropped. Both the CLI and the tab read it, so they cannot
+disagree about which check answers which question.

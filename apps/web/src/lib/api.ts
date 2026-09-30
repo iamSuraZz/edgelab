@@ -475,3 +475,95 @@ export interface RunListItem {
 export function listRuns(limit = 50): Promise<RunListItem[]> {
   return request(`/backtests?limit=${String(limit)}`);
 }
+
+/* ------------------------------------------------- validation & optimisation */
+
+export type CheckStatus = 'pass' | 'warn' | 'fail' | 'n/a';
+
+export interface CheckResultView {
+  readonly id: string;
+  readonly label: string;
+  readonly severity: 'critical' | 'warning';
+  readonly status: CheckStatus;
+  readonly detail: string;
+  /** Present only when `status` is `n/a`. The tab must render it rather than a bare dash. */
+  readonly inconclusiveReason?: string | null;
+  readonly evidence?: Readonly<Record<string, number | string>> | null;
+}
+
+export interface ValidationContextView {
+  readonly feed: string | null;
+  readonly dataVersion: number | null;
+  readonly engineId: string | null;
+  readonly engineVersion: string | null;
+  readonly holdoutId: string | null;
+  readonly holdoutViewCount: number | null;
+  readonly rangeFromMs: number | null;
+  readonly rangeToMs: number | null;
+  /** Set only when a seal cut the request short (A40). */
+  readonly requestedRangeToMs: number | null;
+}
+
+export interface ValidationSummary {
+  readonly id: string;
+  readonly runId: string;
+  readonly kind: 'validation' | 'optimization';
+  readonly state: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+  readonly verdict: string | null;
+  readonly context: ValidationContextView;
+  readonly error: string | null;
+  readonly elapsedMs: number | null;
+  readonly createdAtMs: number;
+}
+
+export interface ValidationDetail extends ValidationSummary {
+  /** The whole report. Shape varies by `kind`; the tab narrows on it. */
+  readonly report: unknown;
+  readonly spec: unknown;
+}
+
+export function startValidation(runId: string): Promise<{ validationId: string; jobId: string }> {
+  return request(`/backtests/${runId}/validate`, { method: 'POST' });
+}
+
+export function listValidations(runId: string): Promise<ValidationSummary[]> {
+  return request(`/backtests/${runId}/validations`);
+}
+
+export function listOptimizations(runId: string): Promise<ValidationSummary[]> {
+  return request(`/backtests/${runId}/optimizations`);
+}
+
+export function fetchValidation(id: string): Promise<ValidationDetail> {
+  return request(`/validations/${id}`);
+}
+
+export function cancelValidation(id: string): Promise<unknown> {
+  return request(`/validations/${id}/job`, { method: 'DELETE' });
+}
+
+export interface OptimizationSpecInput {
+  readonly name: string;
+  readonly min: number;
+  readonly max: number;
+  readonly step: number;
+}
+
+export interface OptimizationRequest {
+  readonly inputs: readonly OptimizationSpecInput[];
+  readonly objective: 'netProfit' | 'profitFactor' | 'sharpe' | 'expectancy';
+  readonly minTrades: number;
+  readonly maxCombinations?: number;
+  readonly folds?: number;
+}
+
+export function startOptimization(
+  runId: string,
+  spec: OptimizationRequest,
+): Promise<{ validationId: string; jobId: string; combinations: number; gridSize: number }> {
+  return request(`/backtests/${runId}/optimize`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(spec),
+  });
+}

@@ -18,3 +18,4 @@ export * from './wf-optimization-report';
 export * from './regime';
 export * from './timeframe-matrix';
 export * from './monte-carlo';
+export * from './two-questions';
