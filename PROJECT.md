@@ -102,7 +102,7 @@ CI runs all five checks on every push — see `.github/workflows/ci.yml`.
 
 | check             | result | covers                                                        |
 | ----------------- | ------ | ------------------------------------------------------------- |
-| `pnpm test:e2e`   | 36/36  | **slice B DONE WHEN**, and **all of slice D step 2**          |
+| `pnpm test:e2e`   | 37/37  | **slice B DONE WHEN**, and **all of slice D step 2**          |
 | `pnpm test:smoke` | 23/23  | **slice C DONE WHEN**, and slice F's browser work             |
 | `integrity.smoke` | 4/4    | **slice D DONE WHEN** — validate → verdict → evidence → chart |
 
