@@ -29,6 +29,8 @@ export interface CheckCardProps {
   readonly onJumpToTime?: (atMs: number) => void;
   /** Jump to a trade. Evidence keys naming a trade sequence become buttons when set. */
   readonly onJumpToTrade?: (seq: number) => void;
+  /** The check's visual, when it has one. Rendered above the raw evidence. */
+  readonly visual?: React.ReactNode;
 }
 
 /**
@@ -45,10 +47,12 @@ export function CheckCard({
   check,
   onJumpToTime,
   onJumpToTrade,
+  visual,
 }: CheckCardProps): React.JSX.Element {
   const [open, setOpen] = useState(check.status === 'fail');
   const why = WHY_IT_MATTERS[check.id];
   const evidence = Object.entries(check.evidence ?? {});
+  const expandable = evidence.length > 0 || visual !== undefined;
 
   return (
     <article
@@ -103,7 +107,7 @@ export function CheckCard({
           )}
         </div>
 
-        {evidence.length > 0 && (
+        {expandable && (
           <button
             type="button"
             onClick={() => {
@@ -118,6 +122,12 @@ export function CheckCard({
           </button>
         )}
       </header>
+
+      {open && visual !== undefined && (
+        <div className="border-t border-border p-2.5" data-testid={`check-${check.id}-visual`}>
+          {visual}
+        </div>
+      )}
 
       {open && evidence.length > 0 && (
         <dl

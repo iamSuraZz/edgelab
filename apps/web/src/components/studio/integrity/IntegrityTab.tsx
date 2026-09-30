@@ -12,6 +12,8 @@ import {
   type ValidationDetail,
 } from '@/lib/api';
 import { CheckCard } from './CheckCard';
+import { CheckVisual } from './CheckVisual';
+import { HoldoutAction } from './HoldoutAction';
 import { VerdictHeader } from './VerdictHeader';
 
 /**
@@ -21,8 +23,21 @@ import { VerdictHeader } from './VerdictHeader';
  * that has been validated shows its verdict immediately. Running again is explicit.
  */
 
+/** Checks that own a visual. Keeps the card from rendering an empty expandable section. */
+const VISUAL_CHECKS = new Set([
+  'execution-cost-stress',
+  'execution-intrabar-replay',
+  'overfitting-oos-split',
+  'overfitting-rolling-oos',
+  'overfitting-regimes',
+  'overfitting-timeframe-matrix',
+  'overfitting-monte-carlo',
+]);
+
 export interface IntegrityTabProps {
   readonly runId: string;
+  readonly currency: string;
+  readonly pipSize: number;
   /** Switch to the Chart tab and centre on an instant. */
   readonly onJumpToTime?: (atMs: number) => void;
   readonly onJumpToTrade?: (seq: number) => void;
@@ -35,6 +50,8 @@ interface ValidationReportShape {
 
 export function IntegrityTab({
   runId,
+  currency,
+  pipSize,
   onJumpToTime,
   onJumpToTrade,
 }: IntegrityTabProps): React.JSX.Element {
@@ -173,14 +190,46 @@ export function IntegrityTab({
             />
 
             <div className="space-y-2 p-3">
-              {report.results.map((check) => (
-                <CheckCard
-                  key={check.id}
-                  check={check}
-                  {...(onJumpToTime !== undefined ? { onJumpToTime } : {})}
-                  {...(onJumpToTrade !== undefined ? { onJumpToTrade } : {})}
+              {detail.data.context.holdoutId !== null && (
+                <HoldoutAction
+                  sealedFromMs={detail.data.context.rangeToMs}
+                  viewCount={detail.data.context.holdoutViewCount ?? 0}
+                  retiredSeals={0}
+                  onTestOnHoldout={() => {
+                    // Not yet wired to an endpoint: the confirmation exists so the consequence is
+                    // stated, and running against sealed data needs an unseal route the API does
+                    // not expose yet.
+                    setError(
+                      'Testing on the holdout is not wired to the API yet. The seal, the count and this confirmation are in place; the unseal endpoint is not.',
+                    );
+                  }}
                 />
-              ))}
+              )}
+              {report.results.map((check) => {
+                const visual = (
+                  <CheckVisual
+                    checkId={check.id}
+                    detail={detail.data as ValidationDetail}
+                    currency={currency}
+                    pipSize={pipSize}
+                    {...(onJumpToTime === undefined ? {} : { onJumpToTime })}
+                    {...(onJumpToTrade === undefined ? {} : { onJumpToTrade })}
+                  />
+                );
+                const hasVisual =
+                  (visual as React.ReactElement<{ checkId: string }>).props.checkId !== undefined &&
+                  VISUAL_CHECKS.has(check.id);
+
+                return (
+                  <CheckCard
+                    key={check.id}
+                    check={check}
+                    {...(hasVisual ? { visual } : {})}
+                    {...(onJumpToTime !== undefined ? { onJumpToTime } : {})}
+                    {...(onJumpToTrade !== undefined ? { onJumpToTrade } : {})}
+                  />
+                );
+              })}
             </div>
           </>
         )}

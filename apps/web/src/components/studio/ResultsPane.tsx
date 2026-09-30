@@ -116,6 +116,10 @@ export function ResultsPane({
 
   const currency = detail.config.accountCurrency;
   const digits = symbols.data?.find((s) => s.symbol === detail.config.symbol)?.digits ?? 5;
+  // A pip is ten ticks on a 5- or 3-digit pair and one tick otherwise, which is what the flips
+  // table needs to report pips per fill.
+  const pipSize =
+    symbols.data?.find((s) => s.symbol === detail.config.symbol)?.pipSize ?? 10 ** -(digits - 1);
 
   return (
     <Panel
@@ -227,6 +231,8 @@ export function ResultsPane({
         {tab === 'Integrity' && (
           <IntegrityTab
             runId={detail.id}
+            currency={currency}
+            pipSize={pipSize}
             /*
              * The chart's focus is a TIME (A53). Look-ahead evidence names bars that frequently
              * carry no trade — the causality check's first peek on a leaking script is bar 0 — so a
