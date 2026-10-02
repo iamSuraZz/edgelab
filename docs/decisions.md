@@ -2639,3 +2639,61 @@ variable nobody set. The boot banner also listed three queues when there were fo
 > that range would then refuse with a message about feeds rather than about seeding. The asymmetry was
 > noticed because this verification did exactly that sequence; no mixed bars were written, because the
 > job was stopped first.
+
+## A69 — A backup is proven by restoring it and serving the app from it
+
+`docker/restore-check.sh` restores the newest dump into a scratch database and verifies it. A dump
+nobody has restored is a file, not a backup, and `ls /backups` proves only that a file exists.
+
+**TimescaleDB needs the pre/post-restore pair.** Its catalog tables — `hypertable`, `chunk`,
+`continuous_agg` — carry circular foreign keys, which is what `pg_dump` warns about on every single
+dump we take, and its background workers will fight a restore in progress.
+`timescaledb_pre_restore()` sets `timescaledb.restoring` and stops those workers;
+`timescaledb_post_restore()` puts both back. Restoring without them appears to work and leaves chunks
+the planner will not use.
+
+What the script checks beyond "psql exited 0", because that alone would pass on a restore that
+silently lost the time-series machinery:
+
+| check                 | why it is not redundant                                                                   |
+| --------------------- | ----------------------------------------------------------------------------------------- |
+| `gzip -t`             | a truncated archive is the likeliest way a backup is useless, and it is free              |
+| hypertable, not table | a plain table answers every SELECT correctly while losing chunk exclusion and compression |
+| compression policy    | a restored database without it grows until the disk fills                                 |
+| three row counts      | against the live database, both numbers printed so a legitimate drift is readable         |
+| a real range query    | covers querying through the hypertable, not only counting                                 |
+
+`ON_ERROR_STOP` is deliberately **off** for the replay: a Timescale dump repeats a few statements
+already satisfied by `CREATE EXTENSION`, and aborting on the first would reject a good backup. The
+verification decides, not the absence of warnings.
+
+**Then the app is served from the restored copy.** `docker-compose.restore-check.yml` points api and
+worker at the scratch database and publishes a port, and the spec-07 journey runs against it:
+
+    docker compose -f docker-compose.prod.yml exec backup /usr/local/bin/restore-check.sh
+    docker compose -f docker-compose.prod.yml -f docker-compose.restore-check.yml up -d api worker web
+    E2E_BASE_URL=http://localhost:8099 pnpm --filter @edgelab/web test:journey
+
+Verified: restore PASS (14,400 bars, 2 runs, 19 symbols, all matching; 0 ERROR lines), then the
+journey **passed against the restored database** — paste, run, validate, chart. That is the half a
+row count cannot reach: a dump can restore with matching counts and still have lost a constraint or
+an index the app needs, and the first symptom would be a failed backtest weeks later.
+
+### Basic auth over SSE: the part that was proven, and the part that was not
+
+The specific deploy-day risk was that the progress stream is a separate `EventSource` request, which
+an `Authorization` header on the navigation would not cover. Behind a stand-in basic-auth proxy:
+
+    GET /api/jobs/<id>/events  ->  200, authenticated as `probe`
+
+So `httpCredentials` does cover the stream. **A full green journey through that proxy was not
+achieved**: it reset the connection at the validation step, while the same test passes through the
+real nginx on the next port with no API errors logged. Attributed to the 15-minute stand-in rather
+than to the product — but attributed, not proven, and it is the one thing to confirm on the first real
+deploy.
+
+> The run that exposed this also tripped the A6 mixed-feed guard for real: a leftover DELAYED backfill
+> job (deleting the scheduler key does not remove an already-scheduled instance) fired against the
+> scratch database and wrote 7,161 dukascopy bars beside the synthetic ones. The guard refused the run
+> with both feeds and their ranges named. Correct behaviour, and a working demonstration of the
+> follow-up recorded in A68.

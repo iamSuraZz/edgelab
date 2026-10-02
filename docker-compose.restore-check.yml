@@ -1,0 +1,30 @@
+# Point the production stack at the RESTORED scratch database and expose it to a browser.
+#
+#   docker compose -f docker-compose.prod.yml exec backup /usr/local/bin/restore-check.sh
+#   docker compose -f docker-compose.prod.yml -f docker-compose.restore-check.yml up -d api worker web
+#   E2E_BASE_URL=http://localhost:8099 pnpm --filter @edgelab/web test:journey
+#
+# This is the half of "prove a restore" that a row count cannot reach: whether the restored database
+# actually SERVES the application. A dump can restore with matching counts and still have lost a
+# constraint, a default or an index the app depends on, and the first thing to notice would be a
+# failed backtest weeks later.
+#
+# A port is published here and ONLY here. The production file publishes nothing — Traefik reaches
+# `web` over the proxy network — so this override is also the one place a port exists to forget.
+# Bring the stack back up with the production file alone when the check is done.
+
+services:
+  api:
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-edgelab}:${POSTGRES_PASSWORD}@db:5432/${SCRATCH_DB:-edgelab_restore_check}
+
+  worker:
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-edgelab}:${POSTGRES_PASSWORD}@db:5432/${SCRATCH_DB:-edgelab_restore_check}
+      # No nightly backfill against a scratch database: it would spend real provider credits to fill
+      # a copy that is about to be dropped.
+      BACKFILL_TARGETS: ''
+
+  web:
+    ports:
+      - '${RESTORE_CHECK_PORT:-8099}:8080'

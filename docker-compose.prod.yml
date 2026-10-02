@@ -189,6 +189,9 @@ services:
     volumes:
       - edgelab-backups:/backups
       - ./docker/backup.sh:/usr/local/bin/backup.sh:ro
+      # The restore VERIFIER lives here too: it needs psql, gunzip and the backups volume, all of
+      # which this container already has. A dump nobody has restored is a file, not a backup.
+      - ./docker/restore-check.sh:/usr/local/bin/restore-check.sh:ro
     networks:
       - internal
     entrypoint: ['/bin/sh', '/usr/local/bin/backup.sh']
