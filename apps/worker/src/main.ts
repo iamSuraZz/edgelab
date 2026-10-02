@@ -26,11 +26,16 @@ async function main(): Promise<void> {
 
   console.log(
     `worker: listening on ${QUEUE_NAMES.backtest}, ${QUEUE_NAMES.ingest}, ` +
-      `${QUEUE_NAMES.validation}`,
+      `${QUEUE_NAMES.validation}, ${QUEUE_NAMES.backfill}`,
   );
   // Said out loud at boot: a pool sized from the host's cores instead of the container's quota is
   // invisible otherwise, and only shows up as jobs that are slower in production (A67).
-  console.log(`worker: ${describePoolSizing(resolvePoolSize())}`);
+  console.log(`worker: ${describePoolSizing(resolvePoolSize(env.WORKER_POOL_SIZE))}`);
+  if (handle.scheduledBackfills.length === 0) {
+    console.log('worker: no nightly backfill scheduled (BACKFILL_TARGETS is empty)');
+  } else {
+    for (const line of handle.scheduledBackfills) console.log(`worker: scheduled ${line}`);
+  }
   console.log(
     `worker: piscina threads=${String(handle.pool.stats.threads)} ` +
       `timeout=${String(handle.pool.stats.timeoutMs / 1000)}s ` +

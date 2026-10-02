@@ -122,6 +122,10 @@ services:
       # Unset means "the CPUs this container is actually allowed" — not the host's core count,
       # which is what `os.cpus()` reports and would oversubscribe a limited container (A67).
       WORKER_POOL_SIZE: ${WORKER_POOL_SIZE:-}
+      # The nightly backfill runs INSIDE the worker as a repeatable job (A68), so there is no host
+      # cron entry to forget. Empty means no schedule at all.
+      BACKFILL_TARGETS: ${BACKFILL_TARGETS:-}
+      BACKFILL_CRON: ${BACKFILL_CRON:-17 3 * * *}
     volumes:
       # Shared with the API so a download started by one is visible to the other.
       - edgelab-data-cache:/data/cache

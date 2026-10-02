@@ -11,38 +11,28 @@ import os from 'node:os';
  *
  * One thread is left for the worker's own event loop: it serves BullMQ, publishes progress and
  * writes results, and starving it makes a busy pool look stalled from the outside.
+ *
+ * The override arrives as an ALREADY-VALIDATED number from `@edgelab/shared/config`, not by reading
+ * `process.env` here — only the zod loader reads the environment (PROJECT.md).
  */
-
-/** Explicit override, for a host where the quota is not what you want to spend. */
-const ENV_KEY = 'WORKER_POOL_SIZE';
 
 export interface PoolSizing {
   readonly threads: number;
   /** Where the number came from, so the worker can say so at boot. */
-  readonly source: 'env' | 'available-parallelism';
+  readonly source: 'configured' | 'available-parallelism';
   readonly available: number;
 }
 
-export function resolvePoolSize(env: NodeJS.ProcessEnv = process.env): PoolSizing {
+export function resolvePoolSize(configured?: number): PoolSizing {
   const available = availableCpus();
-  const raw = env[ENV_KEY];
 
-  if (raw !== undefined && raw.trim() !== '') {
-    const parsed = Number(raw);
-    if (!Number.isInteger(parsed) || parsed < 1) {
-      throw new RangeError(
-        `${ENV_KEY} must be a positive integer, received ${JSON.stringify(raw)}. ` +
-          'Leave it unset to use the CPUs available to this container.',
-      );
-    }
-    return { threads: parsed, source: 'env', available };
+  if (configured !== undefined) {
+    return { threads: configured, source: 'configured', available };
   }
 
-  return {
-    threads: Math.max(1, available - 1),
-    source: 'available-parallelism',
-    available,
-  };
+  // `max(1, …)` because `available - 1` is 0 on a single-CPU container, and a pool of zero threads
+  // accepts work and never runs it.
+  return { threads: Math.max(1, available - 1), source: 'available-parallelism', available };
 }
 
 function availableCpus(): number {
@@ -53,8 +43,8 @@ function availableCpus(): number {
 }
 
 export function describePoolSizing(sizing: PoolSizing): string {
-  return sizing.source === 'env'
-    ? `worker pool: ${String(sizing.threads)} thread(s) from ${ENV_KEY} ` +
+  return sizing.source === 'configured'
+    ? `worker pool: ${String(sizing.threads)} thread(s) from WORKER_POOL_SIZE ` +
         `(${String(sizing.available)} CPU(s) available)`
     : `worker pool: ${String(sizing.threads)} thread(s), from ${String(sizing.available)} CPU(s) ` +
         `available to this container`;

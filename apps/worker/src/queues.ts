@@ -8,6 +8,13 @@ export const QUEUE_NAMES = {
   ingest: 'ingest',
   backtest: 'backtest',
   validation: 'validation',
+  /**
+   * The nightly backfill, on its OWN queue (A68).
+   *
+   * Not on `ingest`: that queue serves downloads a person is waiting for, and a nightly job that
+   * deliberately pauses twenty seconds between months would sit in front of them.
+   */
+  backfill: 'backfill',
 } as const;
 
 export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES];

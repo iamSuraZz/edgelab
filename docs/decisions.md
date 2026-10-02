@@ -2592,3 +2592,50 @@ development database — 327 runs and a million bars of real work. It was caught
 mismatch, which is luck, not a safeguard. The names are now prefixed,
 `${EDGELAB_VOLUME_PREFIX:-edgelab-prod}-*`, so production cannot adopt a development volume by
 default.
+
+## A68 — The nightly backfill moved INTO the worker, reversing its own argument
+
+`backfill-cli.ts` used to argue the opposite, and said so in its docstring: scheduling belongs
+outside the process, because a cron entry is inspectable, kills cleanly and survives a deploy,
+whereas an in-process timer needs the worker up all night and hides its own state.
+
+**That reasoning assumed a laptop.** On a server that runs around the clock the premises change: the
+worker IS up all night, and a host cron entry would live outside the compose file — invisible to this
+repo, lost on a host rebuild, and needing its own copy of the database URL. Each original objection
+is answered rather than waved away:
+
+| objection         | answer                                                                                                                                                                                        |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| inspectable       | the scheduler is in Redis and every attempt is written to `ingest_jobs`, so `pnpm backfill --status` and the Data page both show it — more legible than a cron log on a host nobody logs into |
+| kills cleanly     | the worker's existing drain-on-SIGTERM path covers it                                                                                                                                         |
+| survives a deploy | `upsertJobScheduler` is keyed by id, so a redeploy re-registers the same schedule rather than accumulating one per boot, which `queue.add({ repeat })` would                                  |
+
+Its **own queue**, not `ingest`: that queue serves downloads a person is waiting for, and a nightly
+job that deliberately pauses twenty seconds between months would sit in front of them. The CLI and
+the job now share one `runBackfill`, so the two cannot drift, and a rate-limited night RESOLVES the
+job rather than failing it — BullMQ would retry a failure, and retrying into a provider that is
+already refusing is exactly what the pacing exists to avoid.
+
+Empty `BACKFILL_TARGETS` is the default and means no schedule: a server that began hitting a
+provider merely because it was deployed would be worse than one that needs a variable set. Every
+malformed entry throws by name, because the failure mode of a scheduled job is silence.
+
+> **Verified in the running production stack.** With `BACKFILL_CRON="*/5 * * * *"` the worker logged
+> `scheduled backfill:EURUSD:dukascopy at "*/5 * * * *" UTC`, the scheduler key appeared in Redis, and
+> ~195s later the job fired by itself and resumed correctly:
+> `contiguous through 2024-01-12; resuming there`. Stopped there rather than letting it pull months
+> from Dukascopy.
+
+**Two corrections this surfaced.** `WORKER_POOL_SIZE`, `BACKFILL_TARGETS` and `BACKFILL_CRON` are now
+in the **zod schema** and reach the code as validated config — my first version read `process.env`
+directly in two modules, which PROJECT.md forbids outright ("Nothing else reads `process.env`").
+`WORKER_POOL_SIZE` needs a `preprocess` because compose writes an EMPTY string for an unset variable
+and `z.coerce.number()` turns that into 0, which fails `min(1)` and would take the worker down over a
+variable nobody set. The boot banner also listed three queues when there were four.
+
+> **Follow-up, not fixed here:** `data:seed-synthetic` refuses to seed a symbol that already holds
+> real bars (A6), but `runIngest` does **not** refuse to ingest into a symbol holding synthetic bars.
+> Seed a symbol and then schedule a backfill over it and you get a mixed feed, which every run over
+> that range would then refuse with a message about feeds rather than about seeding. The asymmetry was
+> noticed because this verification did exactly that sequence; no mixed bars were written, because the
+> job was stopped first.

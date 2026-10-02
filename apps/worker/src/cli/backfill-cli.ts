@@ -1,21 +1,9 @@
-import {
-  contiguousEndWithin,
-  createDbClient,
-  finishIngestAttempt,
-  findSymbolByCode,
-  blockedNotice,
-  rateLimitStreak,
-  recentIngestAttempts,
-  startIngestAttempt,
-  updateIngestAttempt,
-} from '@edgelab/db';
-import { RateLimitExhaustedError } from '@edgelab/data';
+import { createDbClient, findSymbolByCode, recentIngestAttempts } from '@edgelab/db';
 import { Redis } from 'ioredis';
 
 import { loadDotEnvFile, loadEnv } from '@edgelab/shared/config';
 
-import { buildProviderRegistry } from '../ingest/providers';
-import { runIngest } from '../ingest/ingest';
+import { runBackfill } from '../ingest/backfill';
 
 /**
  * The nightly backfill.
@@ -38,27 +26,11 @@ import { runIngest } from '../ingest/ingest';
  *     requested start — verified on real data, including the case where an earlier attempt left a
  *     hole in the middle.
  *
- * SCHEDULING is deliberately left outside the process. A cron entry or a Task Scheduler job calling
- * this command is inspectable, kills cleanly and survives a deploy; an in-process timer needs the
- * worker to be up all night and hides its own state. One line, e.g.:
- *
- *   17 3 * * *  cd /srv/edgelab && pnpm backfill EURUSD dukascopy 2022-01-01 2024-02-01 >> backfill.log 2>&1
+ * SCHEDULING now lives INSIDE the worker as a repeatable job (A68), which reverses what this file
+ * used to argue. The old reasoning — a cron entry is inspectable and survives a deploy — assumed a
+ * laptop; on a server that runs around the clock the worker is already up, and a host cron entry
+ * would be invisible to this repo. This command remains the way to run one attempt by hand.
  */
-
-/**
- * Nightly pacing. Roughly 20 seconds between months and 8 between the bid and ask halves of one.
- *
- * Two years is 24 months, so ~8 minutes of deliberate waiting across a job that already spends
- * minutes downloading. That is a trade a scheduled job can afford and an interactive one cannot,
- * which is exactly why this is a separate command from `pnpm ingest`.
- */
-const NIGHTLY_PACING = {
-  pauseBetweenMonthsMs: 20_000,
-  pauseBetweenBatchesMs: 8_000,
-  // Fewer than the interactive default: pacing should mean we rarely get here, and when we do the
-  // right answer is to stop for the night rather than sit in a five-minute ladder.
-  rateLimitRetries: 3,
-} as const;
 
 function parseDate(value: string, label: string): number {
   const ms = Date.parse(value);
@@ -91,101 +63,37 @@ async function main(): Promise<void> {
   const fromMs = parseDate(fromIso, 'from');
   const toMs = parseDate(toIso, 'to');
 
-  let attemptId: string | null = null;
-  let barsWritten = 0;
-
   try {
-    const symbol = await findSymbolByCode(db, symbolCode);
-    if (symbol === null) throw new Error(`No symbol "${symbolCode}".`);
-
-    // Where the last attempt left off, printed before doing anything so the log is answerable
-    // about progress even if tonight's run achieves nothing.
-    const before = await contiguousEndWithin(db, symbol.id, fromMs, toMs, 4 * 86_400_000);
-    process.stdout.write(
-      before === null
-        ? `nothing stored in range yet; starting at ${fromIso}\n`
-        : `contiguous through ${new Date(before.last).toISOString().slice(0, 10)}; resuming there\n`,
+    const history = await recentIngestAttempts(
+      db,
+      (await findSymbolByCode(db, symbolCode))?.id ?? '',
+      3,
     );
-
-    // A streak of refusals is different information from one refusal, and a job that exits zero
-    // every morning is exactly how nobody notices. Reported before the attempt as well as after,
-    // so the banner shows even on a night that fails immediately.
-    const notice = blockedNotice(provider, await rateLimitStreak(db, symbol.id, provider));
-    if (notice !== null)
-      process.stdout.write(`
-!! ${notice}
-
-`);
-
-    const history = await recentIngestAttempts(db, symbol.id, 3);
     for (const h of history) {
       process.stdout.write(
-        `  last: ${h.state.padEnd(13)} ${String(h.barsWritten).padStart(7)} bars  ${h.message}\n`,
+        `  last: ${h.state.padEnd(13)} ${String(h.barsWritten).padStart(7)} bars  ${h.message}
+`,
       );
     }
 
-    const registry = buildProviderRegistry(env, redis, { dukascopy: NIGHTLY_PACING });
-
-    attemptId = await startIngestAttempt(db, {
-      symbolId: symbol.id,
-      provider,
-      fromMs,
-      toMs,
-    });
-
-    let lastMessage = '';
-    const result = await runIngest(
-      db,
-      registry,
-      { symbol, provider: provider as Parameters<typeof runIngest>[2]['provider'], fromMs, toMs },
-      async (p) => {
-        barsWritten = p.barsWritten;
-        if (p.message === lastMessage) return;
-        lastMessage = p.message;
-        process.stdout.write(`[${String(p.percent).padStart(3)}%] ${p.message}\n`);
-        await updateIngestAttempt(db, attemptId!, {
-          percent: p.percent,
-          message: p.message,
-          barsWritten: p.barsWritten,
-        });
+    const outcome = await runBackfill(
+      { symbolCode, provider, fromMs, toMs },
+      {
+        db,
+        redis,
+        env,
+        log: (line) =>
+          process.stdout.write(`${line}
+`),
       },
     );
 
-    const done = result.effectiveFrom >= toMs || result.barsInserted === 0;
-    await finishIngestAttempt(db, attemptId, {
-      state: 'completed',
-      barsWritten: result.barsInserted,
-      message: done
-        ? `range complete (${String(result.barsInserted)} new bars)`
-        : `${String(result.barsInserted)} new bars`,
-    });
-
-    process.stdout.write(`\ncompleted: ${String(result.barsInserted)} new bars\n`);
+    // Exit ZERO on a throttled night: a scheduled job that reports failure for "come back later"
+    // gets muted, and the attempt is already recorded as `rate-limited` for the Data page.
+    if (outcome.state === 'rate-limited') return;
   } catch (error: unknown) {
-    // The expected outcome on a throttled night, and NOT a failure.
-    if (error instanceof RateLimitExhaustedError) {
-      if (attemptId !== null) {
-        await finishIngestAttempt(db, attemptId, {
-          state: 'rate-limited',
-          barsWritten,
-          message: `stopped at ${new Date(error.reachedMs).toISOString().slice(0, 10)}; resumes next run`,
-        });
-      }
-      process.stdout.write(`\n${error.message}\n`);
-      process.stdout.write(`kept ${String(barsWritten)} bars from this attempt.\n`);
-      // Exit ZERO: a scheduled job that reports failure for "come back later" gets muted.
-      return;
-    }
-
-    if (attemptId !== null) {
-      await finishIngestAttempt(db, attemptId, {
-        state: 'failed',
-        barsWritten,
-        message: 'failed',
-        error: String(error),
-      });
-    }
-    process.stderr.write(`backfill failed: ${String(error)}\n`);
+    process.stderr.write(`backfill failed: ${String(error)}
+`);
     process.exitCode = 1;
   } finally {
     await db.close();

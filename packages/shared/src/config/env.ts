@@ -27,6 +27,28 @@ export const envSchema = z.object({
   API_PORT: z.coerce.number().int().min(1).max(65535).default(3001),
   WEB_PORT: z.coerce.number().int().min(1).max(65535).default(5173),
   DATA_CACHE_DIR: z.string().min(1).default('./.cache'),
+
+  /**
+   * Threads for the worker's piscina pools. Unset means "the CPUs available to this container".
+   *
+   * `preprocess` because compose writes an EMPTY string when the variable is absent
+   * (`${WORKER_POOL_SIZE:-}`), and `z.coerce.number()` turns '' into 0, which then fails `min(1)`
+   * and takes the whole worker down over a variable nobody set.
+   */
+  WORKER_POOL_SIZE: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.coerce.number().int().min(1).optional(),
+  ),
+
+  /**
+   * Nightly backfill targets, `SYMBOL:provider:fromISO:toISO` separated by commas.
+   *
+   * Empty by default, deliberately: a server that began hitting a provider merely because it was
+   * deployed would be worse than one that needs a variable set.
+   */
+  BACKFILL_TARGETS: z.string().default(''),
+  /** Cron for those targets, UTC. Off the hour, because everything else in the world runs at :00. */
+  BACKFILL_CRON: z.string().min(1).default('17 3 * * *'),
 });
 
 export type Env = z.infer<typeof envSchema>;

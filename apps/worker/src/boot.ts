@@ -1,4 +1,4 @@
-import type { Job } from 'bullmq';
+import type { Job, Queue } from 'bullmq';
 import { Redis } from 'ioredis';
 
 import { createDbClient, type DbClient } from '@edgelab/db';
@@ -8,6 +8,7 @@ import { buildProviderRegistry } from './ingest/providers';
 import { processBacktestJob, type BacktestJobData } from './jobs/backtest-job';
 import { CancellationWatcher } from './jobs/cancellation';
 import { JobEventPublisher } from './jobs/events';
+import { BACKFILL_JOB, processBackfillJob, type BackfillJobData } from './jobs/backfill-job';
 import { HOLDOUT_JOB, processHoldoutJob, type HoldoutJobData } from './jobs/holdout-job';
 import { IngestCancelled, processIngestJob, type IngestJobData } from './jobs/ingest-job';
 import {
@@ -17,7 +18,9 @@ import {
 } from './jobs/optimization-job';
 import { processValidationJob, type ValidationJobData } from './jobs/validation-job';
 import { TaskPool } from './pool/pool';
-import { QUEUE_NAMES, createWorker } from './queues';
+import { parseBackfillTargets } from './ingest/backfill';
+import { resolvePoolSize } from './pool/sizing';
+import { QUEUE_NAMES, createQueue, createWorker } from './queues';
 
 /**
  * Boot the workers and hand back a handle that can shut them down.
@@ -33,6 +36,8 @@ export interface WorkerHandle {
   readonly pool: TaskPool;
   readonly events: JobEventPublisher;
   readonly cancellation: CancellationWatcher;
+  /** What the nightly scheduler registered, for the boot banner. Empty when none is configured. */
+  readonly scheduledBackfills: readonly string[];
   /** Resolves once both workers are consuming, so a test can enqueue without racing. */
   ready(): Promise<void>;
   close(): Promise<void>;
@@ -48,7 +53,8 @@ export function startWorkers(env: Env, options: StartWorkersOptions = {}): Worke
   const db = createDbClient(env.DATABASE_URL, { max: 8, statementTimeoutMs: 600_000 });
   const redis = new Redis(env.REDIS_URL, { maxRetriesPerRequest: null });
   const pool = new TaskPool({
-    ...(options.maxThreads === undefined ? {} : { maxThreads: options.maxThreads }),
+    // The pool size comes from validated config, falling back to the container's CPU quota (A67).
+    maxThreads: options.maxThreads ?? resolvePoolSize(env.WORKER_POOL_SIZE).threads,
     ...(options.taskTimeoutMs === undefined ? {} : { taskTimeoutMs: options.taskTimeoutMs }),
   });
   const events = new JobEventPublisher(redis);
@@ -111,7 +117,23 @@ export function startWorkers(env: Env, options: StartWorkersOptions = {}): Worke
     { concurrency: 1 },
   );
 
-  const workers = [backtestWorker, ingestWorker, validationWorker];
+  /*
+   * The nightly backfill: one worker, concurrency 1, plus a job scheduler per target.
+   *
+   * `upsertJobScheduler` is keyed by id, so a redeploy re-registers the same schedule rather than
+   * accumulating a duplicate every boot — which is what `queue.add({ repeat })` would do.
+   */
+  const backfillWorker = createWorker(
+    QUEUE_NAMES.backfill,
+    env.REDIS_URL,
+    (job: Job) => processBackfillJob(job as Job<BackfillJobData>, { db, redis, env }),
+    { concurrency: 1 },
+  );
+
+  const backfillQueue = createQueue(QUEUE_NAMES.backfill, env.REDIS_URL);
+  const scheduled = scheduleBackfills(backfillQueue, env);
+
+  const workers = [backtestWorker, ingestWorker, validationWorker, backfillWorker];
 
   for (const worker of workers) {
     worker.on('failed', (job, err) => {
@@ -136,10 +158,38 @@ export function startWorkers(env: Env, options: StartWorkersOptions = {}): Worke
     async ready(): Promise<void> {
       await Promise.all([cancellation.whenReady(), ...workers.map((w) => w.waitUntilReady())]);
     },
+    scheduledBackfills: scheduled,
+
     async close(): Promise<void> {
+      await backfillQueue.close().catch(() => undefined);
       // Workers first, so in-flight jobs are not cut off from the resources they are using.
       await Promise.allSettled(workers.map((w) => w.close()));
       await Promise.allSettled([cancellation.close(), pool.close(), db.close(), redis.quit()]);
     },
   };
+}
+
+/**
+ * Register a repeatable job per backfill target, and report what was registered.
+ *
+ * Returns the descriptions rather than logging them, so `main.ts` owns the output and a test can
+ * assert on the result. An empty list is the DEFAULT and is not an error: a server that silently
+ * began hitting a provider because it was deployed would be worse than one that needs a variable.
+ */
+function scheduleBackfills(queue: Queue, env: Env): string[] {
+  const targets = parseBackfillTargets(env.BACKFILL_TARGETS);
+  if (targets.length === 0) return [];
+
+  // Default 03:17 UTC: off the hour, because every other scheduled thing in the world runs at :00.
+  const pattern = env.BACKFILL_CRON;
+
+  return targets.map((target) => {
+    const id = `backfill:${target.symbolCode}:${target.provider}`;
+    void queue.upsertJobScheduler(
+      id,
+      { pattern, tz: 'UTC' },
+      { name: BACKFILL_JOB, data: { target } },
+    );
+    return `${id} at "${pattern}" UTC`;
+  });
 }
