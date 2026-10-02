@@ -3,7 +3,7 @@
 # BullMQ worker. Build context is the REPO ROOT:
 #   docker build -f docker/Dockerfile.worker -t edgelab-worker .
 #
-ARG NODE_VERSION=22-alpine
+ARG NODE_VERSION=22.14-alpine
 
 FROM node:${NODE_VERSION} AS base
 ENV PNPM_HOME=/pnpm

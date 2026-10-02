@@ -3,7 +3,7 @@
 # NestJS API. Build context is the REPO ROOT, not this directory:
 #   docker build -f docker/Dockerfile.api -t edgelab-api .
 #
-ARG NODE_VERSION=22-alpine
+ARG NODE_VERSION=22.14-alpine
 
 FROM node:${NODE_VERSION} AS base
 ENV PNPM_HOME=/pnpm

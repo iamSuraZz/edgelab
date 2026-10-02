@@ -1,8 +1,8 @@
-import os from 'node:os';
 import type { MessagePort } from 'node:worker_threads';
 import Piscina from 'piscina';
 
 import { classifyTaskFailure } from './errors';
+import { resolvePoolSize } from './sizing';
 
 /**
  * A piscina pool with the two limits a user-supplied script needs: a wall-clock timeout and a
@@ -45,7 +45,7 @@ export class IsolatedPool<TInput, TOutput> {
 
     this.pool = new Piscina({
       filename: options.filename,
-      maxThreads: options.maxThreads ?? Math.max(1, os.cpus().length - 1),
+      maxThreads: options.maxThreads ?? resolvePoolSize().threads,
       idleTimeout: options.idleTimeoutMs ?? 30_000,
       resourceLimits: {
         maxOldGenerationSizeMb: this.memoryLimitMb,

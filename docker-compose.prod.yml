@@ -29,7 +29,7 @@ services:
       start_period: 30s
 
   redis:
-    image: redis:7-alpine
+    image: redis:7.4.2-alpine
     container_name: edgelab-redis
     restart: unless-stopped
     # BullMQ needs keyspace notifications for delayed/stalled job handling.
@@ -45,10 +45,40 @@ services:
       retries: 10
       start_period: 10s
 
+  # Migrations, run ONCE per deploy, before anything that reads the schema.
+  #
+  # A production database starts empty, so "run `pnpm db:migrate` by hand after the first deploy" is
+  # a step that gets forgotten exactly once and leaves the API booting against no tables. This uses
+  # the WORKER image because that image already contains the db package and tsx; a fourth Dockerfile
+  # would be a second thing to keep in step with the lockfile.
+  #
+  # `restart: "no"` matters: a migrate container that restarts on exit would re-run on every boot and
+  # fight the API for the advisory lock. It is expected to exit 0 and stay exited.
+  migrate:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.worker
+    image: edgelab-worker:${EDGELAB_VERSION:-latest}
+    container_name: edgelab-migrate
+    restart: 'no'
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER:-edgelab}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-edgelab}
+      # The migrator reaches no queue and no provider, but the config loader validates the whole
+      # schema, so the keys it insists on are supplied.
+      REDIS_URL: redis://redis:6379
+    command: ['pnpm', '--filter', '@edgelab/db', 'run', 'migrate']
+    networks:
+      - internal
+    depends_on:
+      db:
+        condition: service_healthy
+
   api:
     build:
       context: .
       dockerfile: docker/Dockerfile.api
+    image: edgelab-api:${EDGELAB_VERSION:-latest}
     container_name: edgelab-api
     restart: unless-stopped
     environment:
@@ -69,11 +99,15 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      # Not merely "started": the schema has to be in place before the first query.
+      migrate:
+        condition: service_completed_successfully
 
   worker:
     build:
       context: .
       dockerfile: docker/Dockerfile.worker
+    image: edgelab-worker:${EDGELAB_VERSION:-latest}
     container_name: edgelab-worker
     restart: unless-stopped
     environment:
@@ -85,6 +119,9 @@ services:
       API_PORT: 3001
       WEB_PORT: 8080
       DATA_CACHE_DIR: /data/cache
+      # Unset means "the CPUs this container is actually allowed" — not the host's core count,
+      # which is what `os.cpus()` reports and would oversubscribe a limited container (A67).
+      WORKER_POOL_SIZE: ${WORKER_POOL_SIZE:-}
     volumes:
       # Shared with the API so a download started by one is visible to the other.
       - edgelab-data-cache:/data/cache
@@ -95,11 +132,15 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      # Not merely "started": the schema has to be in place before the first query.
+      migrate:
+        condition: service_completed_successfully
 
   web:
     build:
       context: .
       dockerfile: docker/Dockerfile.web
+    image: edgelab-web:${EDGELAB_VERSION:-latest}
     container_name: edgelab-web
     restart: unless-stopped
     networks:
@@ -132,7 +173,7 @@ services:
   # Nightly pg_dump with 7-day retention. Plain alpine + a sleep loop rather than
   # a cron image: one less thing to learn, and the schedule is visible here.
   backup:
-    image: postgres:17-alpine
+    image: postgres:17.2-alpine
     container_name: edgelab-backup
     restart: unless-stopped
     environment:
@@ -151,15 +192,22 @@ services:
       db:
         condition: service_healthy
 
+# Volume names are PREFIXED, and the prefix defaults to something production-specific.
+#
+# They used to be the same literal names `docker-compose.yml` uses — `edgelab-db-data` and friends —
+# so bringing this stack up on a machine that had ever run the dev stack silently attached the
+# production containers to the DEVELOPMENT database. It was caught by a password mismatch rather
+# than by anything deliberate, which is luck, not a safeguard. On a server the collision is
+# harmless; locally it points production at a database full of real work.
 volumes:
   edgelab-db-data:
-    name: edgelab-db-data
+    name: ${EDGELAB_VOLUME_PREFIX:-edgelab-prod}-db-data
   edgelab-redis-data:
-    name: edgelab-redis-data
+    name: ${EDGELAB_VOLUME_PREFIX:-edgelab-prod}-redis-data
   edgelab-data-cache:
-    name: edgelab-data-cache
+    name: ${EDGELAB_VOLUME_PREFIX:-edgelab-prod}-data-cache
   edgelab-backups:
-    name: edgelab-backups
+    name: ${EDGELAB_VOLUME_PREFIX:-edgelab-prod}-backups
 
 networks:
   internal:

@@ -13,6 +13,7 @@ import {
 import { CostConfigSchema, DEFAULT_COSTS, timeframeMs, type Timeframe } from '@edgelab/shared';
 
 import { IsolatedPool } from '../pool/isolated-pool';
+import { resolvePoolSize } from '../pool/sizing';
 import { taskPath } from '../pool/pool';
 import type { OptimizeTaskInput, OptimizeTaskOutput } from '../pool/tasks/optimize';
 
@@ -141,7 +142,7 @@ export async function optimizeRun(params: OptimizeRunParams): Promise<OptimizeRu
   const sets = combinations(params.spec);
   const grid = gridSize(params.spec);
 
-  const threads = params.maxThreads ?? Math.max(1, (await cpuCount()) - 1);
+  const threads = params.maxThreads ?? resolvePoolSize().threads;
   const barsPerFold = Math.round((windows[0]!.isToMs - windows[0]!.isFromMs) / tfMs);
   const estimate = estimateOptimization({
     combinations: sets.length,
@@ -241,11 +242,6 @@ export async function optimizeRun(params: OptimizeRunParams): Promise<OptimizeRu
   } finally {
     await pool.close();
   }
-}
-
-async function cpuCount(): Promise<number> {
-  const os = await import('node:os');
-  return os.cpus().length;
 }
 
 function asRecord(v: unknown): Record<string, unknown> {

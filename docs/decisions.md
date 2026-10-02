@@ -2545,3 +2545,50 @@ Two smaller corrections from the same run: clicking a trade row **focuses** it w
 test opens the Chart tab as a user would; and the final permalink check compares the KPI **number**,
 not its rendered text, since the cell carries a label and a buy-and-hold sub-line and string equality
 there asserts the layout rather than the figure.
+
+## A67 — Production readiness, verified by running the production stack
+
+`docker-compose.prod.yml` built and ran locally, and the three claims below were measured rather
+than reasoned about.
+
+**SSE through nginx.** The location block already had `proxy_buffering off` and a 24h read timeout;
+it gained `gzip off` (explicit, not inherited — `gzip_types` happens not to list
+`text/event-stream`, and relying on a type list is relying on nobody adding a type), the forwarded-IP
+headers the REST block already set, and `proxy_send_timeout`. Measured through the web container:
+
+| what                        | observed                                            |
+| --------------------------- | --------------------------------------------------- |
+| frames arrive incrementally | progress at **+0s** and **+1s**, not all at the end |
+| heartbeat on an idle stream | `: keep-alive` at **+15s** and **+30s** exactly     |
+
+The idle case needed the worker stopped so a job would sit queued emitting nothing — two validations
+on a small window both finished inside 8s, which is too fast to leave a gap a proxy would drop.
+
+**Migrations run on deploy.** A one-shot `migrate` service using the WORKER image (it already carries
+the db package and tsx; a fourth Dockerfile would be another thing to keep in step with the
+lockfile), with `restart: "no"` so it cannot re-run on every boot and fight the API for the advisory
+lock, and `condition: service_completed_successfully` on both api and worker. Verified from an empty
+database: `drizzle migrations applied / hypertable created / symbols: 19 inserted / migrate: done`,
+exit 0, api and worker then healthy.
+
+**Every image is pinned to a patch**: `redis:7.4.2-alpine`, `postgres:17.2-alpine`,
+`node:22.14-alpine`, `nginxinc/nginx-unprivileged:1.27.4-alpine`, beside the already-pinned
+TimescaleDB. Each tag was checked to exist with `docker manifest inspect` rather than assumed.
+
+### Two defects this found
+
+**The pool was sized from the HOST's cores.** Both `isolated-pool.ts` and `optimize-run.ts` used
+`os.cpus().length`, which inside a CPU-limited container reports the host — a worker allowed 2 CPUs
+on a 16-core box would have started 15 threads and spent its time context-switching, slower than one
+thread and visible only as jobs that take longer in production than on a laptop.
+`resolvePoolSize()` uses `os.availableParallelism()`, which reads the cgroup quota, leaves one CPU
+for the event loop, accepts a `WORKER_POOL_SIZE` override, and is printed at boot so a wrong number
+is visible rather than merely slow. Six tests, including the empty-string case compose produces when
+the variable is absent.
+
+**The production stack shared the development volumes.** `edgelab-db-data` and friends were the same
+literal names `docker-compose.yml` uses, so bringing production up on this machine attached it to the
+development database — 327 runs and a million bars of real work. It was caught by a password
+mismatch, which is luck, not a safeguard. The names are now prefixed,
+`${EDGELAB_VOLUME_PREFIX:-edgelab-prod}-*`, so production cannot adopt a development volume by
+default.

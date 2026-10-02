@@ -3,6 +3,7 @@ import process from 'node:process';
 import { loadDotEnvFile, loadEnv } from '@edgelab/shared/config';
 
 import { startWorkers } from './boot';
+import { describePoolSizing, resolvePoolSize } from './pool/sizing';
 import { QUEUE_NAMES } from './queues';
 
 /**
@@ -27,6 +28,9 @@ async function main(): Promise<void> {
     `worker: listening on ${QUEUE_NAMES.backtest}, ${QUEUE_NAMES.ingest}, ` +
       `${QUEUE_NAMES.validation}`,
   );
+  // Said out loud at boot: a pool sized from the host's cores instead of the container's quota is
+  // invisible otherwise, and only shows up as jobs that are slower in production (A67).
+  console.log(`worker: ${describePoolSizing(resolvePoolSize())}`);
   console.log(
     `worker: piscina threads=${String(handle.pool.stats.threads)} ` +
       `timeout=${String(handle.pool.stats.timeoutMs / 1000)}s ` +
