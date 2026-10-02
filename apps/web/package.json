@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "clean": "rimraf dist .turbo",
-    "test:smoke": "playwright test"
+    "test:smoke": "playwright test",
+    "test:journey": "playwright test journey.smoke.ts"
   },
   "dependencies": {
     "@edgelab/metrics": "workspace:*",

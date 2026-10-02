@@ -2494,3 +2494,54 @@ run. The CLI is the primary tool in this project; its runs are now as readable a
 > **Verified in the browser** on both: a run with no slippage (rows account for every counted cost,
 > refund note absent) and the `atr-bracket` run above, whose running total now lands exactly on
 > −$9,167.25 with the refund shown on the slippage row.
+
+## A66 — The spec-07 journey is one test, and it can be aimed at the deployed instance
+
+`apps/web/test/smoke/journey.smoke.ts` walks the whole chain in ONE test — paste, run, KPIs,
+validate, verdict, click a trade, chart — with `test.step` for a readable report. Not seven tests:
+the steps share the run, and splitting them would either re-run the backtest per step or depend on
+an ordering Playwright is entitled to change.
+
+It creates everything it needs through the UI and asserts nothing about pre-existing rows, so the
+same test runs locally and against the server:
+
+    E2E_BASE_URL=https://edgelab.example.com     E2E_BASIC_AUTH_USER=me E2E_BASIC_AUTH_PASSWORD=...       pnpm --filter @edgelab/web test:journey
+
+`httpCredentials` rather than an `Authorization` header on `page.goto`, because the progress bar
+opens an `EventSource` — a separate request that a header on the navigation would not cover, and
+Traefik would refuse it on its own. When `E2E_BASE_URL` is set, Vite is **not** started: a local dev
+server would quietly serve the assertions instead of the deployment under test.
+
+### `keyboard.insertText` is not a paste, and it corrupted the script
+
+The first run reported **0 closed trades with a 17% drawdown**. The source stored against the run
+was not the source the test supplied:
+
+    if ta.crossover(fast, slow)
+        strategy.entry("Long", strategy.long)
+
+        if ta.crossunder(fast, slow)        <- nested by Monaco's auto-indent
+            strategy.close("Long")
+
+Monaco treats `insertText` as TYPING, so auto-indent fires per newline and carries the previous
+line's indentation forward. Pine's indentation is semantic: the close could only fire on a bar where
+crossover and crossunder were both true, so the position opened and never closed. It compiled, ran,
+and every assertion short of "did it trade" passed.
+
+**A real clipboard paste does not auto-indent** — Monaco disables it for paste specifically — so
+`pasteEditorText` grants clipboard permission, writes the text, and presses Ctrl+V. The test then
+reads the editor back and asserts `if ta.crossunder` sits at **column zero**, because a mangled paste
+is invisible until a metric comes out wrong.
+
+The old helper survived in `studio.smoke.ts` because it was only ever used on a source expected to
+FAIL compilation, where indentation changes nothing. Both files now share the fixed one.
+
+> Worth recording separately: **`strategy.close` works.** The probe that diagnosed this ran the same
+> script through `pnpm backtest --file` and got 16 closed trades, which is what ruled the engine out
+> and pointed at the editor.
+
+Two smaller corrections from the same run: clicking a trade row **focuses** it without switching tabs
+(the Integrity tab's evidence links switch; a table you scan should not yank the view away), so the
+test opens the Chart tab as a user would; and the final permalink check compares the KPI **number**,
+not its rendered text, since the cell carries a label and a buy-and-hold sub-line and string equality
+there asserts the layout rather than the figure.

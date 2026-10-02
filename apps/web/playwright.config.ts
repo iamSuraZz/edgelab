@@ -19,6 +19,30 @@ const repoRoot = path.resolve(here, '../..');
  * The smoke test checks its own preconditions and fails with that instruction rather than a
  * timeout, so a missing stack is diagnosable from the failure alone.
  */
+/**
+ * Where the tests point, and who they log in as.
+ *
+ * `E2E_BASE_URL` retargets the whole suite at a DEPLOYED instance — the point being that the
+ * journey test is the same test whether it runs against Vite on this laptop or against the server
+ * behind Traefik. A deployment that passes a different test from the one CI runs has not been
+ * verified by CI.
+ *
+ * When it is set, Vite is NOT started: the app under test is already running somewhere else, and a
+ * local dev server would quietly serve the assertions instead.
+ */
+const REMOTE_BASE_URL = process.env['E2E_BASE_URL'];
+const LOCAL_BASE_URL = `http://localhost:${process.env['WEB_PORT'] ?? '5173'}`;
+
+/**
+ * Basic auth, as Traefik asks for it in production (spec 07).
+ *
+ * Playwright's `httpCredentials` answers the 401 challenge for every request including the SSE
+ * stream, which a hand-written Authorization header on `page.goto` would not — the EventSource the
+ * progress bar opens is a separate request and would be refused on its own.
+ */
+const BASIC_AUTH_USER = process.env['E2E_BASIC_AUTH_USER'];
+const BASIC_AUTH_PASSWORD = process.env['E2E_BASIC_AUTH_PASSWORD'];
+
 export default defineConfig({
   testDir: './test/smoke',
   testMatch: '**/*.smoke.ts',
@@ -31,7 +55,18 @@ export default defineConfig({
   fullyParallel: false,
   reporter: [['list']],
   use: {
-    baseURL: `http://localhost:${process.env['WEB_PORT'] ?? '5173'}`,
+    baseURL: REMOTE_BASE_URL ?? LOCAL_BASE_URL,
+    ...(BASIC_AUTH_USER === undefined || BASIC_AUTH_PASSWORD === undefined
+      ? {}
+      : {
+          httpCredentials: {
+            username: BASIC_AUTH_USER,
+            password: BASIC_AUTH_PASSWORD,
+          },
+        }),
+    // A deployed instance is reached over TLS that Traefik terminates; a staging certificate
+    // should fail loudly rather than be waved through, so this is NOT relaxed.
+    ignoreHTTPSErrors: false,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'off',
@@ -59,11 +94,17 @@ export default defineConfig({
       },
     },
   ],
-  webServer: {
-    command: 'pnpm --filter @edgelab/web dev',
-    cwd: repoRoot,
-    url: `http://localhost:${process.env['WEB_PORT'] ?? '5173'}`,
-    reuseExistingServer: true,
-    timeout: 120_000,
-  },
+  // Omitted entirely when targeting a deployed instance: there is nothing local to start, and
+  // starting Vite anyway would serve the tests from the wrong build.
+  ...(REMOTE_BASE_URL === undefined
+    ? {
+        webServer: {
+          command: 'pnpm --filter @edgelab/web dev',
+          cwd: repoRoot,
+          url: LOCAL_BASE_URL,
+          reuseExistingServer: true,
+          timeout: 120_000,
+        },
+      }
+    : {}),
 });

@@ -1,5 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
+import { pasteEditorText } from './editor';
+
 /**
  * The slice-C smoke test: load a fixture → run EURUSD H1 for January 2024 → KPIs visible → click a
  * trade → the chart scrolls to it.
@@ -207,7 +209,7 @@ test.describe('Studio', () => {
       timeout: 30_000,
     });
 
-    await setEditorText(page, '//@version=5\nstrategy("x"\n@@@\n');
+    await pasteEditorText(page, '//@version=5\nstrategy("x"\n@@@\n');
 
     await expect(page.getByTestId('compile-status')).toContainText('error', { timeout: 30_000 });
     await expect(page.getByTestId('compatibility-panel')).toBeVisible();
@@ -236,18 +238,4 @@ function expectedCurrency(value: number): string {
     maximumFractionDigits: 2,
   });
   return `${sign}$${abs}`;
-}
-
-/**
- * Replace the editor's contents.
- *
- * Monaco's textarea is an invisible input proxy, so Playwright's  either hangs waiting
- * for it to be editable or silently writes nowhere. Clicking into the editor and driving it with
- * select-all + keyboard is the interaction a person actually performs.
- */
-async function setEditorText(page: Page, text: string): Promise<void> {
-  await page.locator('.monaco-editor').first().click();
-  await page.keyboard.press('ControlOrMeta+A');
-  await page.keyboard.press('Delete');
-  await page.keyboard.insertText(text);
 }
