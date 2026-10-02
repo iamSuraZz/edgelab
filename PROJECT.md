@@ -95,17 +95,18 @@ pnpm run import:file mt5 EURUSD <abs.csv> 120        # 120 = broker server UTC o
 
 ## Current status — NOT v1.0
 
-Green: `build` 9/9, `typecheck` 17/17, `lint` clean, **1,009 tests** (`pnpm test`).
+Green: `build` 9/9, `typecheck` 17/17, `lint` clean, **1,027 tests** (`pnpm test`).
 CI runs all five checks on every push — see `.github/workflows/ci.yml`.
 
 **Verified against the real docker stack:**
 
-| check             | result | covers                                                                                                   |
-| ----------------- | ------ | -------------------------------------------------------------------------------------------------------- |
-| `pnpm test:e2e`   | 41/41  | **slice B DONE WHEN**, and **all of slice D step 2**                                                     |
-| `pnpm test:smoke` | 34/34  | **slice C DONE WHEN**, and slice F's browser work                                                        |
-| `integrity.smoke` | 5/5    | **slice D DONE WHEN** — validate → verdict → evidence → chart, plus the clean twin. **Runs in CI** (A60) |
-| `data.smoke`      | 6/6    | Data page + spec 05's heatmap and waterfall (A61–A65)                                                    |
+| check             | result | covers                                                                                                                       |
+| ----------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm test:e2e`   | 41/41  | **slice B DONE WHEN**, and **all of slice D step 2**                                                                         |
+| `pnpm test:smoke` | 35/35  | **slice C DONE WHEN**, and slice F's browser work                                                                            |
+| `integrity.smoke` | 5/5    | **slice D DONE WHEN** — validate → verdict → evidence → chart, plus the clean twin. **Runs in CI** (A60)                     |
+| `journey.smoke`   | 1/1    | **spec 07 end to end**: paste → run → KPIs → validate → verdict → trade → chart (A66). Retargetable at the deployed instance |
+| `data.smoke`      | 6/6    | Data page + spec 05's heatmap and waterfall (A61–A65)                                                                        |
 
 **Slices A, B, C and D are DONE and verified.** Slice D's three steps — the validation engine, the
 API (`POST /backtests/:id/validate` + `/optimize` with SSE and cancel) and the "Integrity &
@@ -469,10 +470,19 @@ arrives: `ensureFeedSymbol` creates `EURUSD.exness` sharing EURUSD's instrument 
 
 ### Slice F — what exists, what does not
 
-**v1.0.0 was NOT tagged, deliberately.** Slice F's own DONE WHEN requires "the deployed instance
-runs a backtest **and a validation** end to end" — and the validation feature does not exist
-(slice D is one module wired to nothing). A `v1.0.0` tag is a durable claim that the product is
-complete; creating one now would misrepresent the repo to anyone who reads it later.
+**Slice F is complete and v1.0.0 is NOT yet tagged — one step remains, and it is yours.**
+
+Its DONE WHEN is "the E2E suite passes and the deployment stack runs the real thing". Both are now
+demonstrated: the spec-07 journey passes locally, in CI, against a restored backup, and against a
+remote base URL behind basic auth; and the production images were built and run, serving a real
+backtest and validation through nginx. What has NOT happened is a deploy to your Coolify host, which
+needs your credentials. **See [docs/deploy.md](docs/deploy.md).**
+
+The tag is deliberately left to you, for the same reason it was withheld before: it is a durable
+public claim, and the honest moment to make it is after the deployed instance has run a backtest and
+a validation end to end. One command once it has:
+
+    git tag -a v1.0.0 -m "EdgeLab v1.0.0" && git push origin v1.0.0
 
 | Piece                                                          | State                      |
 | -------------------------------------------------------------- | -------------------------- |
@@ -496,7 +506,17 @@ Spec 07's E2E is "paste a fixture → run → KPIs appear → **run validation**
 jumps to it". `studio.smoke.ts` already covers every step but the validation one, which cannot be
 written until slice D's Integrity tab exists. None of it has been executed — it needs the stack.
 
-**Slice F's buildable surface is now exhausted.** Everything left is blocked on Docker (E2E run,
-profiling), on the absent validation feature (the E2E's fourth step, the v1.0.0 tag), or on your
-Coolify credentials. `shell.smoke.ts` is 19/19 green in a real browser and covers the Studio shell,
-the run report, the Library, Compare and the keyboard/focus behaviour — all without a backend.
+**The production stack was built and run, not merely written.** Verified against it:
+
+| check                       | evidence                                                            |
+| --------------------------- | ------------------------------------------------------------------- |
+| images build                | all four, with every third-party image pinned to a patch            |
+| migrations on deploy        | one-shot `migrate` exits 0 from an empty database; api/worker wait  |
+| SSE through nginx           | frames at **+0s/+1s**, heartbeat at **+15s/+30s** on an idle stream |
+| nightly backfill            | fired on its own schedule and resumed from the contiguous end       |
+| backup restores             | hypertable, compression policy and three row counts all verified    |
+| the app runs on the restore | the spec-07 journey passed against the restored database            |
+
+Still open: the **screen-reader pass**, **performance profiling** (needs a year of M5), and confirming
+**SSE through Traefik** on the real host — a stand-in basic-auth proxy reset the stream where the real
+nginx does not, so that one is attributed rather than proven (A69).
