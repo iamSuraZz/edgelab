@@ -106,35 +106,54 @@ pnpm test:watch     # watch mode
 ## Deployment (Coolify + Traefik)
 
 Three multi-stage, non-root images and a compose stack that publishes **no ports at all** —
-Traefik is the only way in.
+the proxy is the only way in.
+
+**[docs/deploy.md](docs/deploy.md) is the deployment guide**: the exact Coolify UI steps, every
+environment variable, how to generate the basic-auth credential, how to seed the two-year feed from
+the Data page inside one day's free provider budget, and how to verify the nightly backup _restores_
+rather than merely exists.
+
+| file                               | used by                                           |
+| ---------------------------------- | ------------------------------------------------- |
+| `docker-compose.coolify.yml`       | **Coolify** — it generates the Traefik labels     |
+| `docker-compose.prod.yml`          | a hand-rolled Traefik host, and the restore check |
+| `docker-compose.restore-check.yml` | the restore check only; the one file with a port  |
+
+Migrations are **not** a manual step: a one-shot `migrate` service runs them and the API and worker
+wait for it to complete, because a production database starts empty.
 
 ```bash
+# A hand-rolled Traefik host. On Coolify, follow docs/deploy.md instead.
 cp .env.prod.example .env        # then fill it in, on the server
 docker compose -f docker-compose.prod.yml build
 docker compose -f docker-compose.prod.yml up -d
-docker compose -f docker-compose.prod.yml exec api node packages/db/dist/migrate.js
 ```
 
 | service  | image                             | user      | notes                               |
 | -------- | --------------------------------- | --------- | ----------------------------------- |
 | `web`    | nginx-unprivileged + Vite build   | `uid 101` | the only Traefik-exposed service    |
-| `api`    | node:22-alpine                    | `uid 100` | healthcheck hits the real `/health` |
-| `worker` | node:22-alpine                    | `uid 100` | BullMQ + piscina                    |
+| `api`    | node:22.14-alpine                 | `uid 100` | healthcheck hits the real `/health` |
+| `worker` | node:22.14-alpine                 | `uid 100` | BullMQ + piscina, nightly backfill  |
 | `db`     | timescale/timescaledb 2.17.2-pg17 | —         | internal network only               |
-| `redis`  | redis:7-alpine                    | —         | internal network only               |
-| `backup` | postgres:17-alpine                | —         | nightly `pg_dump`, 7-day retention  |
+| `redis`  | redis:7.4.2-alpine                | —         | internal network only               |
+| `backup` | postgres:17.2-alpine              | —         | nightly `pg_dump` + restore check   |
 
 ### Basic auth
 
-Single-user app, so Traefik guards the whole thing. Generate the credential and **double
-every `$`** before putting it in `.env`, because compose treats `$` as interpolation:
+Single-user app, so the proxy guards the whole thing, and only the `web` service is ever exposed —
+the API has no authentication of its own and is reached through nginx on the internal network.
+
+On **Coolify** use its built-in HTTP Basic Authentication toggle; nothing goes in the repository. See
+[docs/deploy.md](docs/deploy.md#4-turn-on-basic-auth).
+
+On a hand-rolled Traefik host, generate the credential and **double every `$`** before putting it in
+`.env`, because compose treats `$` as interpolation:
 
 ```bash
-htpasswd -nbB you 'your-password' | sed 's/\$/\$\$/g'
+docker run --rm httpd:2.4-alpine htpasswd -nbB you 'your-password' | sed 's/\$/\$\$/g'
 ```
 
-Set `TRAEFIK_NETWORK` to the external network Traefik already runs on — Coolify usually names
-it `coolify`, a hand-rolled Traefik usually `proxy`.
+Set `TRAEFIK_NETWORK` to the external network Traefik already runs on.
 
 ### Backups
 

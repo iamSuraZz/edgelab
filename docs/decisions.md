@@ -2697,3 +2697,42 @@ deploy.
 > scratch database and wrote 7,161 dukascopy bars beside the synthetic ones. The guard refused the run
 > with both feeds and their ranges named. Correct behaviour, and a working demonstration of the
 > follow-up recorded in A68.
+
+## A70 — Coolify deploys its own compose file, because one file cannot serve both
+
+Read from Coolify's current Docker Compose documentation rather than inferred. Three rules decided the
+shape:
+
+1. **Coolify generates the Traefik labels** for a Git-based compose application, from the domain set
+   in its UI; you maintain proxy labels yourself _only_ in Raw Compose Deployment. The hand-written
+   router, service and TLS labels in `docker-compose.prod.yml` would duplicate or contradict them.
+2. **A domain binds to one service** via `SERVICE_FQDN_<SERVICE>_<PORT>` — the compose service name
+   with hyphens and dots underscored, plus the container port. So `web` carries
+   `SERVICE_FQDN_WEB_8080` and nothing else carries an FQDN.
+3. **`exclude_from_hc: true`** stops a one-shot container from deciding application health — which the
+   `migrate` service needs, since it exits 0 and stays exited.
+
+**Rule 3 forced a second file.** Plain `docker compose` rejects that key outright —
+`services.migrate additional properties 'exclude_from_hc' not allowed` — and
+`docker-compose.prod.yml` has to stay locally runnable because the backup restore check (A69) runs
+against it. So `docker-compose.coolify.yml` is what Coolify deploys and the other stays portable.
+
+Two files is a drift risk, so `test/compose.test.ts` asserts they agree on third-party images,
+environment keys and service names, that neither publishes a port, that both keep the migrate gate on
+api and worker, and that only `web` has an FQDN. Writing it caught its own bug first: a
+two-space-indented key also matches entries under `volumes:` and `networks:`, so the first version
+reported `internal` and `proxy` as missing services.
+
+**Volume names are NOT pinned in the Coolify file.** Coolify manages them, and pinning is what made
+the production stack adopt the development database (A67).
+
+**Basic auth is Coolify's built-in toggle, not a label in the repo.** The repository is public, and a
+compose file referencing an htpasswd hash — even through a variable — invites pasting the hash into
+Git. The label form is documented as an alternative, including that every `$` must be doubled in a
+compose file, with the warning not to enable both.
+
+`docs/deploy.md` covers the UI steps, every variable, the credential, seeding the two-year Twelve Data
+feed from the Data page inside one day's free budget (148 requests against 800), and both backup
+checks. It also records the trap that cost a local verification run: **`POSTGRES_PASSWORD` only
+applies on the first deploy**, because Postgres reads it when initialising an empty data directory and
+ignores it afterwards.

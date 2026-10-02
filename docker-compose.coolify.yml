@@ -1,0 +1,178 @@
+# The compose file COOLIFY deploys. Point the application's "Docker Compose Location" at this path.
+#
+# Why this exists alongside `docker-compose.prod.yml`, rather than being the same file:
+#
+#   - Coolify accepts a service-level `exclude_from_hc:` key, which plain `docker compose` rejects
+#     outright ("additional properties 'exclude_from_hc' not allowed"). One file cannot validate in
+#     both places, and `docker-compose.prod.yml` has to stay runnable locally because the backup
+#     restore check runs against it.
+#   - Coolify GENERATES the Traefik router, service and TLS labels from the domain you set in its UI.
+#     Hand-written ones (which `docker-compose.prod.yml` carries, for a plain Traefik host) would
+#     duplicate or contradict them. Its docs are explicit that you maintain proxy labels yourself
+#     "only when using Raw Compose Deployment".
+#
+# `docs/deploy.md` lists every variable and the exact UI steps. Keep the two files in step — a test
+# in `test/compose.test.ts` asserts they agree on images and environment keys, because the failure
+# mode of a forked deployment file is a production stack that silently differs from the verified one.
+
+services:
+  db:
+    image: timescale/timescaledb:2.17.2-pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-edgelab}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-edgelab}
+      TIMESCALEDB_TELEMETRY: 'off'
+    volumes:
+      - edgelab-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-edgelab} -d ${POSTGRES_DB:-edgelab}']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  redis:
+    image: redis:7.4.2-alpine
+    restart: unless-stopped
+    command: ['redis-server', '--appendonly', 'yes', '--notify-keyspace-events', 'Ex']
+    volumes:
+      - edgelab-redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  # Migrations, once per deploy, before anything reads the schema. A production database starts
+  # empty, so this must not be a manual step.
+  migrate:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.worker
+    restart: 'no'
+    # COOLIFY-SPECIFIC: a container that exits 0 and stays exited must not drag the application's
+    # health down. Without this the deployment reports unhealthy forever after a successful migrate.
+    exclude_from_hc: true
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER:-edgelab}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-edgelab}
+      REDIS_URL: redis://redis:6379
+    command: ['pnpm', '--filter', '@edgelab/db', 'run', 'migrate']
+    depends_on:
+      db:
+        condition: service_healthy
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    restart: unless-stopped
+    # NO domain and NO proxy labels: the API is reached only by `web`, over the internal network.
+    # Giving it an FQDN would publish an unauthenticated API beside the authenticated UI.
+    environment:
+      NODE_ENV: production
+      API_PORT: 3001
+      DATABASE_URL: postgresql://${POSTGRES_USER:-edgelab}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-edgelab}
+      REDIS_URL: redis://redis:6379
+      TWELVEDATA_API_KEY: ${TWELVEDATA_API_KEY:-}
+      ACCOUNT_CURRENCY: ${ACCOUNT_CURRENCY:-USD}
+      WEB_PORT: 8080
+      DATA_CACHE_DIR: /data/cache
+    volumes:
+      - edgelab-data-cache:/data/cache
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.worker
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER:-edgelab}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-edgelab}
+      REDIS_URL: redis://redis:6379
+      TWELVEDATA_API_KEY: ${TWELVEDATA_API_KEY:-}
+      ACCOUNT_CURRENCY: ${ACCOUNT_CURRENCY:-USD}
+      API_PORT: 3001
+      WEB_PORT: 8080
+      DATA_CACHE_DIR: /data/cache
+      # Unset means the CPUs this container is actually allowed, not the host's core count.
+      WORKER_POOL_SIZE: ${WORKER_POOL_SIZE:-}
+      # The nightly backfill runs inside the worker (A68), so there is no host cron to forget.
+      BACKFILL_TARGETS: ${BACKFILL_TARGETS:-}
+      BACKFILL_CRON: ${BACKFILL_CRON:-17 3 * * *}
+    volumes:
+      # Shared with the API so a download started by one is visible to the other.
+      - edgelab-data-cache:/data/cache
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.web
+    restart: unless-stopped
+    environment:
+      # THE ONLY SERVICE WITH A DOMAIN.
+      #
+      # Coolify's magic variable: the suffix is the compose service name, and `_8080` tells the proxy
+      # which container port to route to. Set the actual domain in the UI under the service's Domains
+      # field; Coolify fills this in and generates the Traefik labels for it.
+      SERVICE_FQDN_WEB_8080: ''
+    healthcheck:
+      # Served by nginx itself, so `web` reports healthy even when the API is down — they are
+      # separate concerns and a red API should not look like a red deployment.
+      test: ['CMD-SHELL', 'wget -q -O- http://127.0.0.1:8080/healthz || exit 1']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    depends_on:
+      - api
+
+  # Nightly pg_dump with 7-day retention, plus the restore verifier.
+  backup:
+    image: postgres:17.2-alpine
+    restart: unless-stopped
+    exclude_from_hc: true
+    environment:
+      PGUSER: ${POSTGRES_USER:-edgelab}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB:-edgelab}
+      PGHOST: db
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-7}
+    volumes:
+      - edgelab-backups:/backups
+      - ./docker/backup.sh:/usr/local/bin/backup.sh:ro
+      - ./docker/restore-check.sh:/usr/local/bin/restore-check.sh:ro
+    entrypoint: ['/bin/sh', '/usr/local/bin/backup.sh']
+    depends_on:
+      db:
+        condition: service_healthy
+
+# Coolify parses these and shows them read-only under Configuration > Persistent Storage. It manages
+# the actual volume names, so they are NOT pinned with `name:` here — pinning them is what made the
+# production stack adopt the development database on a shared host (A67).
+volumes:
+  edgelab-db-data:
+  edgelab-redis-data:
+  edgelab-data-cache:
+  edgelab-backups:
+# No `networks:` block on purpose. Coolify puts every service of an application on one private
+# network and attaches its proxy to the services that have a domain — here, only `web`. Declaring an
+# external `proxy` network (which `docker-compose.prod.yml` does, for a hand-rolled Traefik host)
+# would fail on a Coolify host where that network has a different name.

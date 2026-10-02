@@ -29,7 +29,12 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
-    include: ['packages/**/*.{test,spec}.ts', 'apps/**/*.{test,spec}.ts'],
+    include: [
+      'packages/**/*.{test,spec}.ts',
+      'apps/**/*.{test,spec}.ts',
+      // Repo-level checks that belong to no package — the compose-drift guard lives here.
+      'test/**/*.{test,spec}.ts',
+    ],
     exclude: ['**/node_modules/**', '**/dist/**'],
   },
 });
