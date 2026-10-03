@@ -37,6 +37,8 @@ import { VALIDATION_FIXTURES } from '@edgelab/validation';
 import { assertSingleFeed } from '../ingest/feed-guard';
 import { loadDotEnvFile, loadEnv } from '@edgelab/shared/config';
 
+import { MemoryProbe } from '../diagnostics/memory-probe';
+
 /**
  * Run a backtest end to end, without the queue or the API.
  *
@@ -60,6 +62,8 @@ interface Args {
   readonly accountCurrency: string;
   readonly warmupBars: number;
   readonly sourceFile: string | null;
+  /** Print a per-stage memory table. Run with `--expose-gc` for retained rather than peak-ish numbers. */
+  readonly measureMemory: boolean;
   /**
    * Position size in LOTS, applied as a `default_qty_value` override. 0 keeps whatever the
    * script itself declares.
@@ -88,6 +92,7 @@ options:
   --fixture <name>    one of: ${[...STRATEGY_FIXTURES, ...VALIDATION_FIXTURES].map((f) => f.id).join(', ')}
   --all               run every fixture
   --file <path.pine>  run a Pine file instead of a fixture
+  --mem               print heap/external per stage, with bytes per bar
   --costs <file.json> CostConfig overrides, merged over the defaults
   --capital <n>       initial capital (default 10000)
   --currency <CCY>    account currency (default USD)
@@ -130,6 +135,7 @@ function parseArgs(argv: readonly string[]): Args {
   if (toMs <= fromMs) throw new Error('--to must be after --from');
 
   const sourceFile = flags.get('file') ?? null;
+  const measureMemory = bare.has('mem');
   const fixtureName = flags.get('fixture');
   const fixtures = bare.has('all')
     ? STRATEGY_FIXTURES.map((f) => f.id)
@@ -150,6 +156,7 @@ function parseArgs(argv: readonly string[]): Args {
     accountCurrency: (flags.get('currency') ?? 'USD').toUpperCase(),
     warmupBars: Number(flags.get('warmup') ?? 500),
     sourceFile,
+    measureMemory,
     lots: Number(flags.get('lots') ?? 1),
     leverage: Number(flags.get('leverage') ?? 100),
   };
@@ -202,8 +209,14 @@ async function main(): Promise<void> {
 
     // A seal cutting the range short is ANNOUNCED, never silent: a run that covers less than it
     // appears to is worse than one that refuses, because its numbers look like an answer.
+    const probe = args.measureMemory ? new MemoryProbe({ forceGc: true }) : null;
+    probe?.mark('baseline', null);
+
     const m1Read = await readM1(db, symbolRow.id, barsFromMs, args.toMs);
     const m1 = m1Read.bars;
+
+    // The FIRST stage worth measuring: every stored M1 row for the whole range, as JS objects.
+    probe?.mark('db read (M1)', m1.length);
     // A seal cuts the range, so the run records what actually ran with the request beside it.
     const effectiveToMs = m1Read.truncation === null ? args.toMs : m1Read.truncation.cutAtMs;
 
@@ -242,6 +255,7 @@ async function main(): Promise<void> {
           : { source: sourceForFixture(name), label: name };
 
       const ok = await runOne({
+        probe,
         // The EFFECTIVE range: every downstream consumer — the engine, the metrics window, the
         // stored row — sees the window that actually ran, so none of them has to correct for a
         // truncation later (A40).
@@ -303,6 +317,7 @@ interface RunOneParams {
   readonly source: string;
   readonly label: string;
   readonly dataVersion: number;
+  readonly probe?: MemoryProbe | null;
 }
 
 async function runOne(params: RunOneParams): Promise<boolean> {
@@ -351,6 +366,9 @@ async function runOne(params: RunOneParams): Promise<boolean> {
 
   try {
     const run = await orchestrateRun({
+      ...(params.probe == null
+        ? {}
+        : { onStage: (stageName, bars) => void params.probe!.mark(stageName, bars) }),
       engine,
       source,
       symbol: spec,
@@ -424,7 +442,16 @@ async function runOne(params: RunOneParams): Promise<boolean> {
       totalMs: run.totalMs,
     });
 
+    params.probe?.mark('persistence', run.trades.length);
+
     printRun(label, runId, run, warnings.length);
+
+    if (params.probe != null) {
+      console.log('');
+      console.log('   MEMORY BY STAGE');
+      console.log(params.probe.format());
+    }
+
     return run.crossCheck.ok;
   } catch (error: unknown) {
     const message = error instanceof Error ? (error.stack ?? error.message) : String(error);

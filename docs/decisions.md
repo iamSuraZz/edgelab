@@ -2736,3 +2736,55 @@ feed from the Data page inside one day's free budget (148 requests against 800),
 checks. It also records the trap that cost a local verification run: **`POSTGRES_PASSWORD` only
 applies on the first deploy**, because Postgres reads it when initialising an empty data directory and
 ignores it afterwards.
+
+## A71 — The memory failure is the DB read, not the script
+
+The pool's message — "This usually means an unbounded array or a var that grows on every bar" —
+pointed at the Pine script. It was wrong, and it was a guess: the pool prints it whenever a task hits
+its limit, with no measurement behind it.
+
+`--mem` on `pnpm backtest` now samples heap, external and RSS at every stage with the bar count, and
+forces a major GC first (`--expose-gc`) so the numbers are RETAINED memory rather than uncollected
+garbage. The stage boundaries come from a new `onStage` hook on `orchestrateRun`, kept separate from
+`onProgress` because the two answer different questions — and so `process.memoryUsage()` stays out of
+the engine package, which owns no I/O.
+
+**The failed run reproduced exactly.** XAUUSD M5, 2020-04-06 → 2026-10-01, the stored config and
+script from run `0f1f0a43`:
+
+| stage               | bars      | Δheap        | B/bar |
+| ------------------- | --------- | ------------ | ----- |
+| db read (M1)        | 2,443,915 | **+390.9MB** | 168   |
+| engine              | 491,652   | **+302.6MB** | 645   |
+| window filter       | 491,652   | +4.3MB       | 9     |
+| cost overlay        | 104       | +1.3MB       | —     |
+| equity              | 983,304   | **+144.1MB** | 154   |
+| cross-check/metrics | —         | +0.1MB       | —     |
+
+Peak heap **866MB** — it completes only because the probe run was given 3.5GB. BTCUSD M15 over its
+full 9 years is worse and crosses the limit outright:
+
+| stage        | bars      | Δheap        | B/bar |
+| ------------ | --------- | ------------ | ----- |
+| db read (M1) | 4,765,345 | **+799.6MB** | 176   |
+| engine       | 319,235   | +109.2MB     | 359   |
+| equity       | 638,470   | +93.9MB      | 154   |
+
+Peak heap **1034.3MB** against a 1024MB limit.
+
+### What the measurement actually says
+
+1. **The DB read dominates, and it scales with M1 bars regardless of the chart timeframe.** Reading
+   4.77M rows as JS objects costs 800MB whether the run is M15 or D1 — ~170 bytes for a seven-number
+   `Bar`, which is what a V8 object with seven properties plus an array slot costs.
+2. **Equity curves are arrays of objects** at a flat 154 B/point, and there are two of them
+   (close + intrabar), so they scale with the resampled bar count twice over.
+3. **External memory never moves off 6.1MB.** Nothing in the data path uses a typed array; every
+   number is on the object heap, which is exactly the heap the pool's limit measures.
+4. **The script is not implicated.** Engine growth tracks the RESAMPLED bar count (491k bars →
+   303MB on XAU; 319k → 109MB on BTC), not the number of `var` assignments, and the cost overlay,
+   cross-check and metrics stages are flat. Had the script been leaking, engine growth would have
+   scaled with bars while the data stages stayed flat — the opposite of what the table shows.
+
+So two of the four candidates are confirmed by measurement (M1 as objects; equity as arrays of
+objects), and the two inside the engine are not the dominant terms on these runs.

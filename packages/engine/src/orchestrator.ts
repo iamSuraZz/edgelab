@@ -63,6 +63,15 @@ export interface OrchestrateParams {
   /** Progress callback, so a worker can stream SSE updates. */
   readonly onProgress?: (percent: number, message: string) => void;
   /**
+   * Stage boundaries, for memory instrumentation.
+   *
+   * Separate from `onProgress` because the two answer different questions: progress is for a human
+   * watching a bar fill, this is for measuring what each stage RETAINS. Keeping them separate also
+   * keeps `process.memoryUsage()` out of this package, which owns no I/O and no process concerns —
+   * the caller samples, this only says where the boundaries are.
+   */
+  readonly onStage?: (stage: string, bars: number | null) => void;
+  /**
    * Bars for the currency-conversion pair, when the instrument's quote currency differs from
    * the account currency (spec 03).
    *
@@ -116,6 +125,7 @@ export interface OrchestratedRun {
 export async function orchestrateRun(params: OrchestrateParams): Promise<OrchestratedRun> {
   const startedAt = Date.now();
   const report = params.onProgress ?? ((): void => undefined);
+  const stage = params.onStage ?? ((): void => undefined);
 
   /*
    * Currency. The engine runs in the instrument's QUOTE currency; reporting converts bar by bar
@@ -169,6 +179,7 @@ export async function orchestrateRun(params: OrchestrateParams): Promise<Orchest
     ...(params.recordSecurityCalls === true ? { recordSecurityCalls: true } : {}),
   });
   const engineMs = Date.now() - engineStartedAt;
+  stage('engine', engineResult.bars.length);
 
   // Only the bars inside the requested window belong to the report. Warmup bars were loaded to
   // prime indicators, and counting them would stretch the window, dilute exposure, and add
@@ -176,6 +187,8 @@ export async function orchestrateRun(params: OrchestrateParams): Promise<Orchest
   const windowBars = engineResult.bars.filter(
     (b) => b.time >= params.fromMs && b.time < params.toMs,
   );
+
+  stage('engine window filter', windowBars.length);
 
   report(45, 'applying costs');
   // The feed decides what a stored price means, and therefore which fill pays the spread. The run
@@ -235,6 +248,8 @@ export async function orchestrateRun(params: OrchestrateParams): Promise<Orchest
   // same denominator.
   const sides = costed.map((_t, i) => chargeableSides(measuredSlippage, i + 1));
 
+  stage('cost overlay', costed.length);
+
   report(60, 'reconstructing equity');
   const openTrades = engineResult.trades.filter((t) => t.status === 'open');
 
@@ -246,6 +261,8 @@ export async function orchestrateRun(params: OrchestrateParams): Promise<Orchest
     symbol: params.symbol,
     quoteToAccount,
   });
+
+  stage('equity', equity.close.length + equity.intrabar.length);
 
   report(75, 'cross-checking');
   /*
@@ -273,6 +290,8 @@ export async function orchestrateRun(params: OrchestrateParams): Promise<Orchest
     zeroCosted.reduce((sum, t) => sum + t.netPnl, 0),
   );
 
+  stage('cross-check', null);
+
   report(85, 'computing metrics');
   const metrics = buildMetricsReport({
     trades: costed,
@@ -299,6 +318,8 @@ export async function orchestrateRun(params: OrchestrateParams): Promise<Orchest
     barsInMarket: equity.barsInMarket,
     totalBars: windowBars.length,
   });
+
+  stage('metrics', null);
 
   report(100, 'done');
 
