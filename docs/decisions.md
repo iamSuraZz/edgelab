@@ -2907,3 +2907,38 @@ the proof had to be there:
 | XAUUSD M5, 2020-04-06 → 2026-10-01  | killed at 1024MB | **completed** — 491,940 bars, 11,003 trades, cross-check PASS, ~150s |
 | BTCUSD M15, 2017-08-17 → 2026-10-01 | killed at 1024MB | **completed** — 319,331 bars, 5,519 trades, cross-check PASS, ~30s   |
 | BTCUSD M1, same nine years          | killed at 1024MB | **refused up front**, naming M15 as the fix                          |
+
+## A75 — A pool task cannot import a relative module, so the fix had to live in a package
+
+The first version of A72/A73 put `ResampledM1Source` in `apps/worker/src/data/` and the budget
+estimator in `apps/worker/src/pool/`, on the reasoning that storage should not know about aggregation
+and that a limit is worker policy. Both were then imported by `pool/tasks/backtest.ts`, and the e2e
+suite failed with fifteen errors and this in the logs:
+
+    pool: worker thread error with no owning task:
+    Error: Cannot find module 'F:\Edartpps\worker\src\data
+
+esampled-source'
+imported from F:\Edartpps\worker\src\pool asksacktest.ts
+
+**A task file is loaded by piscina into a worker thread that resolves PACKAGE specifiers but not
+relative `.ts` ones.** Before this change `tasks/backtest.ts` imported nothing relative — only
+`node:*` and `@edgelab/*` — so the constraint had never been exercised, and nothing recorded it.
+
+So both modules moved into packages:
+
+| module                | now in            | note                                              |
+| --------------------- | ----------------- | ------------------------------------------------- |
+| `run-budget.ts`       | `@edgelab/shared` | a pure estimator over a bar count and a timeframe |
+| `resampled-source.ts` | `@edgelab/db`     | needs both the client and the resampler           |
+
+**`db` therefore gains a dependency on `data`,** which is what I avoided on taste when writing A72 —
+and the taste was wrong, because the alternative does not load. The one-way property the architecture
+asks for still holds: `data` does not depend on `db`, so there is no cycle, and the edge is
+storage-reads-aggregation rather than the reverse.
+
+> Worth noting how this surfaced. Every unit test passed, typecheck passed, lint passed, the build
+> passed, and the CLI runs — which load the task's module graph in the MAIN thread — worked perfectly,
+> including the two that proved the memory fix. Only the e2e, which runs the real pool, caught it. The
+> CLI being a main-thread path is exactly why it could not: the measurement it produced was correct and
+> the code it measured was unreachable from the thread that matters.

@@ -1,7 +1,12 @@
-import { timeframeMs, type Timeframe } from '@edgelab/shared';
+import { timeframeMs } from './timeframes';
+import type { Timeframe } from './timeframes';
 
 /**
  * Refuse a run that cannot fit, instead of letting the task be killed half way through.
+ *
+ * Lives in `shared` rather than beside the pool because the pool TASK imports it, and a task runs in a
+ * piscina thread that resolves package specifiers but not relative `.ts` ones (A75). Being a pure
+ * estimator over a bar count and a timeframe, it has no reason to sit anywhere else.
  *
  * The old behaviour was a worker that died at some unpredictable point with
  * "This usually means an unbounded array or a var that grows on every bar" — a guess, and the wrong

@@ -3,6 +3,7 @@ export * from './client';
 export * from './time';
 export * from './copy';
 export * from './candles';
+export * from './resampled-source';
 export * from './ingest-progress';
 export * from './feeds-repo';
 export * from './symbols-repo';

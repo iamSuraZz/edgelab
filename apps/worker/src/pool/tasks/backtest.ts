@@ -1,6 +1,7 @@
 import type { MessagePort } from 'node:worker_threads';
 
 import {
+  ResampledM1Source,
   countM1InWindow,
   createDbClient,
   findSymbolByCode,
@@ -15,10 +16,7 @@ import {
   type OrchestratedRun,
 } from '@edgelab/engine';
 import type { CostConfig, SymbolSpec, Timeframe } from '@edgelab/shared';
-import { timeframeMs, accountMoney } from '@edgelab/shared';
-
-import { ResampledM1Source } from '../../data/resampled-source';
-import { assertRunFitsMemory } from '../memory-budget';
+import { assertRunFitsMemory, timeframeMs, accountMoney } from '@edgelab/shared';
 
 /**
  * The backtest, executed inside a piscina worker thread.

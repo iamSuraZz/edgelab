@@ -1,8 +1,8 @@
 import { MessageChannel } from 'node:worker_threads';
 import path from 'node:path';
 
+import { DEFAULT_MEMORY_LIMIT_MB } from '@edgelab/shared';
 import { IsolatedPool, type IsolatedPoolOptions } from './isolated-pool';
-import { DEFAULT_MEMORY_LIMIT_MB } from './memory-budget';
 import type { BacktestTaskInput, BacktestTaskOutput } from './tasks/backtest';
 import type { PingInput, PingOutput } from './tasks/ping';
 

@@ -8,6 +8,7 @@ import {
   failRun,
   findSymbolByCode,
   listSymbols,
+  ResampledM1Source,
   countM1InWindow,
   readM1Bars,
   upsertStrategyVersion,
@@ -38,7 +39,6 @@ import { assertSingleFeed } from '../ingest/feed-guard';
 import { loadDotEnvFile, loadEnv } from '@edgelab/shared/config';
 
 import { MemoryProbe } from '../diagnostics/memory-probe';
-import { ResampledM1Source } from '../data/resampled-source';
 
 /**
  * Run a backtest end to end, without the queue or the API.

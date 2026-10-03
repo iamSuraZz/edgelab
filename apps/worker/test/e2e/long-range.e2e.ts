@@ -6,13 +6,12 @@ import {
   createDbClient,
   findSymbolByCode,
   countM1InWindow,
+  ResampledM1Source,
   type DbClient,
 } from '@edgelab/db';
 import { syntheticM1 } from '@edgelab/data';
 import { loadDotEnvFile, loadEnv } from '@edgelab/shared/config';
-
-import { ResampledM1Source } from '../../src/data/resampled-source';
-import { RunTooLargeError, assertRunFitsMemory } from '../../src/pool/memory-budget';
+import { RunTooLargeError, assertRunFitsMemory } from '@edgelab/shared';
 
 /**
  * The long-range regression (A72/A73).

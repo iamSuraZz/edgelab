@@ -1,6 +1,8 @@
-import { countM1InWindow, streamM1, type DbClient, type SealTruncation } from '@edgelab/db';
 import { ResampleStream, type ResampleOptions } from '@edgelab/data';
 import type { Bar, Candle, Timeframe } from '@edgelab/shared';
+
+import type { DbClient } from './client';
+import { countM1InWindow, streamM1, type SealTruncation } from './candles';
 
 /**
  * An `M1Source` that aggregates as it reads, so the M1 series is never resident.
@@ -9,9 +11,11 @@ import type { Bar, Candle, Timeframe } from '@edgelab/shared';
  * and whoever holds that array pins it for the run. Nine years of BTC is 4.77M rows — 800MB on the
  * heap before the engine runs a bar, against a 1024MB task limit.
  *
- * Composing the two halves here, rather than in either package, is deliberate: `packages/db` owns SQL
- * and paging and must not know what a resampler is, and `packages/data` owns the resampler and does
- * not depend on the database. The worker is the layer that may see both.
+ * It lives HERE, in `db`, rather than in the worker — which was the first attempt, on the reasoning
+ * that storage should not know about aggregation. The pool task imports it, and a piscina thread
+ * resolves package specifiers but not relative `.ts` ones, so a worker-local module simply cannot be
+ * loaded from a task (A75). `db` therefore gains a dependency on `data`; `data` still does not depend
+ * on `db`, so the one-way property the architecture asks for holds.
  *
  * `readM1` is still implemented, because some paths genuinely need the minutes: the M1 intrabar replay
  * walks them one by one, and FX conversion reads the pair's bars. Those are separate reads with their

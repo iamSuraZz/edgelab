@@ -13,6 +13,7 @@
     "clean": "rimraf dist .turbo"
   },
   "dependencies": {
+    "@edgelab/data": "workspace:*",
     "@edgelab/shared": "workspace:*",
     "drizzle-orm": "0.45.3",
     "pg": "8.23.0",

@@ -5,7 +5,7 @@ import {
   RunTooLargeError,
   assertRunFitsMemory,
   estimateRunMemory,
-} from './memory-budget';
+} from './run-budget';
 
 /**
  * The pre-flight check (A73).

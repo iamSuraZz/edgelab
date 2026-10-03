@@ -285,6 +285,9 @@ importers:
 
   packages/db:
     dependencies:
+      '@edgelab/data':
+        specifier: workspace:*
+        version: link:../data
       '@edgelab/shared':
         specifier: workspace:*
         version: link:../shared
