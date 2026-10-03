@@ -2788,3 +2788,122 @@ Peak heap **1034.3MB** against a 1024MB limit.
 
 So two of the four candidates are confirmed by measurement (M1 as objects; equity as arrays of
 objects), and the two inside the engine are not the dominant terms on these runs.
+
+## A72 — M1 is paged and aggregated as it is read, never held
+
+The fix for A71's dominant term. The engine only ever wants candles at the chart timeframe, so there
+is no reason for the minutes to exist all at once.
+
+Three pieces, each in the layer that owns it:
+
+| piece               | where           | why there                                                                                                                                                            |
+| ------------------- | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ResampleStream`    | `packages/data` | owns the resampler. `resample()` is now implemented in terms of it, so there is exactly ONE bucketing implementation                                                 |
+| `streamM1`          | `packages/db`   | owns SQL and paging. It knows nothing about resampling — `data` does not depend on `db`, and adding the reverse edge would couple storage to aggregation for nothing |
+| `ResampledM1Source` | `apps/worker`   | the only layer that may see both                                                                                                                                     |
+
+**Keyed paging on `ts`, not `LIMIT`/`OFFSET`.** Offset paging re-scans from the start of the range on
+every page, turning a linear read into a quadratic one over millions of rows. Keyed paging is a range
+scan per page and can neither skip nor repeat a row, since `(symbol_id, ts)` is the primary key.
+
+**The seal is enforced in `streamM1` through the same `effectiveWindow` as `readM1`,** because this is
+now a second way into the bars and a reader that forgot the holdout would be a worse bug than the one
+being fixed. `unsealed` records the view inside `streamM1` before any page comes back, keeping A59's
+guarantee on this path too.
+
+### Before and after, measured
+
+XAUUSD M5, 2020-04-06 → 2026-10-01 — the run that failed:
+
+| stage         | bars      | before       | after       |
+| ------------- | --------- | ------------ | ----------- |
+| db read (M1)  | 2,443,915 | **+390.9MB** | gone        |
+| count only    | 2,443,915 | —            | **+0.1MB**  |
+| engine        | 491,652   | +302.6MB     | +299.6MB    |
+| equity        | 983,304   | +144.1MB     | +144.1MB    |
+| **peak heap** |           | **866.1MB**  | **472.3MB** |
+
+BTCUSD M15 over nine years:
+
+| stage         | bars      | before       | after       |
+| ------------- | --------- | ------------ | ----------- |
+| db read (M1)  | 4,765,345 | **+799.6MB** | gone        |
+| count only    | 4,765,345 | —            | **+0.1MB**  |
+| engine        | 319,235   | +106.3MB     | +106.3MB    |
+| equity        | 638,470   | +93.9MB      | +93.9MB     |
+| **peak heap** |           | **1034.3MB** | **231.9MB** |
+
+Identical results either way — 104 trades on XAU, 5,519 on BTC, cross-check PASS on both — which is
+what makes this a memory fix rather than a behaviour change. The paged read is also marginally
+**faster**: 9.1s against 9.8s for 2.44M rows, and the count that replaces it costs 458ms.
+
+**Equity remains an array of objects at 154 B/point and was left alone.** With the read gone it is
+94–144MB on these runs, comfortably inside the limit, and converting it to typed arrays would touch
+every consumer of `EquityPoint` for no present benefit. Recorded as available if a future run needs it
+rather than done speculatively.
+
+The two engine-side candidates from the original list were not the dominant terms: the per-thread bar
+cache (A35) is bounded by distinct windows per optimisation rather than by bars, and the order log sat
+inside an engine stage whose growth tracked the resampled bar count, not the call count.
+
+> A regression I caused and caught: `countM1InWindow` applies the seal like every other reader, so on
+> the HOLDOUT path — whose range is the sealed range — it counted zero and the task reported "no data"
+> for a window full of it. The e2e that asserts the view count rises by exactly one failed, which is
+> the test doing its job. Counting now reads through the seal without recording a view: A59's rule is
+> about returning sealed BARS, and the read that follows records the look before one comes back.
+
+## A73 — A run that cannot fit is refused before it starts
+
+The worker used to die mid-run. Now `assertRunFitsMemory` estimates peak memory from the bar count
+before anything is read, and refuses with the figures and a way forward:
+
+> This run needs about 4642MB against a 1024MB limit. BTCUSD M1 over this range is 4,766,785 chart
+> bars from 4,766,785 stored minutes. Run it on M15 or higher, or shorten the range. Nothing was read,
+> so this cost nothing but the check.
+
+**The constants are measurements, not guesses** — 700 B per chart bar for the engine (the upper end of
+639 and 349 observed) and 154×2 for the two equity series, from A71/A72's tables. The estimate scales
+with CHART bars, which is only correct because the minutes are now paged: a nine-year range costs the
+same to read at D1 as at M1.
+
+It keeps **20% headroom** rather than admitting a run up to the ceiling, because V8 fragments and a
+near-miss still dies. And it names the smallest timeframe that would actually work rather than saying
+"try a higher timeframe" — the reader cannot compute that and would otherwise guess twice.
+
+`TASK_MEMORY_LIMIT_MB` makes the limit configurable, defaulting to the 1024 the failures hit. The pool
+and the pre-flight check read the SAME number: refusing against one figure and dying against another
+would be worse than not checking.
+
+**The OOM message stopped blaming the script.** It used to end "This usually means an unbounded array
+or a var that grows on every bar" on every single OOM — a guess, and wrong for these runs. It now
+reports the stage and bar count the task reached, from the last progress message it sent, and
+implicates the script only from the engine stage onwards, where a script can actually allocate:
+
+> Task exceeded its 1024 MB memory limit and was stopped. It was stopped during "loading bars" at
+> 318,000 chart bars. This is in the platform, not the script: the stage above reads and aggregates
+> data before any strategy code allocates. Report it rather than rewriting the strategy.
+
+## A74 — With memory fixed, the same run hit the TIME limit instead
+
+The XAUUSD run then failed with "Task exceeded its 120s time limit" — still dying mid-run, which is
+the behaviour A73 exists to remove, just against a different ceiling. The engine alone is ~40s on six
+years of M5.
+
+So the timeout is configurable on the same pattern — `TASK_TIMEOUT_MS`, raised from a hard-coded 120s
+to **600s** — and the pre-flight check estimates WALL CLOCK as well as memory, from measured rates:
+0.085ms per chart bar (40.4s/491,652 and 26.9s/319,235 observed) and 3.7µs per M1 row read. A run is
+refused up front against whichever limit it breaches, and the message says which.
+
+Admitting a run on memory and then killing it on time would have been the same bug wearing a different
+hat.
+
+### Verified through the worker, not just the CLI
+
+The Studio's path is `apps/worker/src/pool/tasks/backtest.ts`, and that is where the failure was, so
+the proof had to be there:
+
+| run                                 | before           | after                                                                |
+| ----------------------------------- | ---------------- | -------------------------------------------------------------------- |
+| XAUUSD M5, 2020-04-06 → 2026-10-01  | killed at 1024MB | **completed** — 491,940 bars, 11,003 trades, cross-check PASS, ~150s |
+| BTCUSD M15, 2017-08-17 → 2026-10-01 | killed at 1024MB | **completed** — 319,331 bars, 5,519 trades, cross-check PASS, ~30s   |
+| BTCUSD M1, same nine years          | killed at 1024MB | **refused up front**, naming M15 as the fix                          |

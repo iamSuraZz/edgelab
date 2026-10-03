@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Bar } from '@edgelab/shared';
-import { bucketEnd, bucketStart, resample, resampleCandles } from './resampler';
+import { bucketEnd, bucketStart, resample, resampleCandles, ResampleStream } from './resampler';
 
 const M1 = 60_000;
 
@@ -295,5 +295,102 @@ describe('resample — spread', () => {
     expect(direct[0]?.spread).toBeCloseTo(0.00175, 12);
     expect(chained[0]?.spread).toBeCloseTo(direct[0]?.spread ?? 0, 12);
     expect(chained[0]?.spreadSamples).toBe(4);
+  });
+});
+
+describe('ResampleStream (A72)', () => {
+  /**
+   * The streaming form exists so a multi-year M1 series never has to be resident. Its only real
+   * obligation is to produce EXACTLY what the array form produces — a second bucketing
+   * implementation that disagreed by one bar would be worse than the memory problem it solves.
+   */
+  it('produces exactly what resample() produces, fed one bar at a time', () => {
+    const bars = m1Series(Date.UTC(2024, 0, 15), 500);
+
+    for (const tf of ['M5', 'M15', 'H1', 'H4', 'D1'] as const) {
+      const stream = new ResampleStream(tf);
+      const streamed: ReturnType<typeof resample> = [];
+      for (const bar of bars) {
+        const done = stream.push(bar);
+        if (done !== null) streamed.push(done);
+      }
+      const last = stream.flush();
+      if (last !== null) streamed.push(last);
+
+      expect(streamed, tf).toEqual(resample(bars, tf));
+    }
+  });
+
+  it('is identical when fed in chunks, which is how the DB reader uses it', () => {
+    // The point of the whole exercise: a chunk boundary must not start a new bucket.
+    const bars = m1Series(Date.UTC(2024, 0, 15), 300);
+    const stream = new ResampleStream('H1');
+    const streamed: ReturnType<typeof resample> = [];
+
+    for (let i = 0; i < bars.length; i += 37) {
+      for (const bar of bars.slice(i, i + 37)) {
+        const done = stream.push(bar);
+        if (done !== null) streamed.push(done);
+      }
+    }
+    const last = stream.flush();
+    if (last !== null) streamed.push(last);
+
+    expect(streamed).toEqual(resample(bars, 'H1'));
+  });
+
+  it('emits a candle only once its bucket has closed', () => {
+    const bars = m1Series(Date.UTC(2024, 0, 15), 10);
+    const stream = new ResampleStream('M5');
+
+    // Bars 0-4 fill the first bucket; the candle appears when bar 5 opens the next one.
+    for (let i = 0; i < 5; i += 1) expect(stream.push(bars[i]!)).toBeNull();
+    expect(stream.push(bars[5]!)).not.toBeNull();
+  });
+
+  it('flush returns the final partial bucket, and only once', () => {
+    const bars = m1Series(Date.UTC(2024, 0, 15), 3);
+    const stream = new ResampleStream('H1');
+    for (const bar of bars) stream.push(bar);
+
+    expect(stream.flush()).not.toBeNull();
+    // Calling it twice must not duplicate the last candle into the series.
+    expect(stream.flush()).toBeNull();
+  });
+
+  it('catches an out-of-order bar ACROSS pushes, which the array form cannot see', () => {
+    // A chunked reader returning overlapping pages is the realistic failure, and it would otherwise
+    // produce silently wrong buckets.
+    const bars = m1Series(Date.UTC(2024, 0, 15), 5);
+    const stream = new ResampleStream('M5');
+
+    stream.push(bars[0]!);
+    stream.push(bars[1]!);
+    expect(() => stream.push(bars[1]!)).toThrow(/Duplicate bar timestamp/);
+  });
+
+  it('rejects a backwards bar with the same message the array form uses', () => {
+    const bars = m1Series(Date.UTC(2024, 0, 15), 5);
+    const stream = new ResampleStream('M5');
+
+    stream.push(bars[2]!);
+    expect(() => stream.push(bars[0]!)).toThrow(/sorted ascending/);
+  });
+
+  it('holds only one bucket, whatever the series length', () => {
+    // Not a timing assertion — a structural one. Pushing 50k bars must not accumulate anything, so
+    // the only retained state is the open accumulator.
+    const stream = new ResampleStream('D1');
+    let emitted = 0;
+    let t = Date.UTC(2020, 0, 1);
+
+    for (let i = 0; i < 50_000; i += 1) {
+      const done = stream.push({ time: t, open: 1, high: 1, low: 1, close: 1, volume: 1 });
+      if (done !== null) emitted += 1;
+      t += 60_000;
+    }
+
+    // 50k minutes is ~34.7 days, so ~34 complete daily buckets.
+    expect(emitted).toBe(34);
   });
 });

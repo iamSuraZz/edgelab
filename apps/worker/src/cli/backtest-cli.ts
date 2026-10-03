@@ -8,7 +8,7 @@ import {
   failRun,
   findSymbolByCode,
   listSymbols,
-  readM1,
+  countM1InWindow,
   readM1Bars,
   upsertStrategyVersion,
   type DbClient,
@@ -38,6 +38,7 @@ import { assertSingleFeed } from '../ingest/feed-guard';
 import { loadDotEnvFile, loadEnv } from '@edgelab/shared/config';
 
 import { MemoryProbe } from '../diagnostics/memory-probe';
+import { ResampledM1Source } from '../data/resampled-source';
 
 /**
  * Run a backtest end to end, without the queue or the API.
@@ -212,39 +213,49 @@ async function main(): Promise<void> {
     const probe = args.measureMemory ? new MemoryProbe({ forceGc: true }) : null;
     probe?.mark('baseline', null);
 
-    const m1Read = await readM1(db, symbolRow.id, barsFromMs, args.toMs);
-    const m1 = m1Read.bars;
+    /*
+     * COUNT the range before reading it (A72).
+     *
+     * The old path read every M1 row into an array and kept it for the run — 800MB for nine years of
+     * BTC, which is what killed the worker. Nothing here needs the minutes: the engine asks for
+     * candles at the chart timeframe, and the source aggregates while paging.
+     */
+    const counted = await countM1InWindow(db, symbolRow.id, barsFromMs, args.toMs);
+    probe?.mark('count (no read)', counted.bars);
 
-    // The FIRST stage worth measuring: every stored M1 row for the whole range, as JS objects.
-    probe?.mark('db read (M1)', m1.length);
-    // A seal cuts the range, so the run records what actually ran with the request beside it.
-    const effectiveToMs = m1Read.truncation === null ? args.toMs : m1Read.truncation.cutAtMs;
-
-    if (m1Read.truncation !== null) {
-      const t = m1Read.truncation;
+    const effectiveToMs = counted.truncatedAtMs ?? args.toMs;
+    if (counted.truncatedAtMs !== null) {
       console.log(
         `   NOTE: a sealed holdout cut this range at ` +
-          `${new Date(t.cutAtMs).toISOString().slice(0, 10)} — ` +
-          `${String(t.barsWithheld)} M1 bars withheld. The run below covers less than you asked for.`,
+          `${new Date(counted.truncatedAtMs).toISOString().slice(0, 10)}. ` +
+          `The run below covers less than you asked for.`,
       );
     }
 
-    if (m1.length === 0) {
+    if (counted.bars === 0) {
       throw new Error(
         `No stored M1 bars for ${args.symbol} in ${new Date(barsFromMs).toISOString().slice(0, 10)}` +
           ` .. ${new Date(args.toMs).toISOString().slice(0, 10)}. Run \`pnpm ingest\` first.`,
       );
     }
 
-    const engine = new PineTsEngine({
-      m1: {
-        readM1: (_symbol, fromMs, toMs) =>
-          Promise.resolve(m1.filter((b) => b.time >= fromMs && b.time < toMs)),
+    let m1BarsRead = 0;
+    // `m1Source`, not `source`: the fixture loop below binds `source` to the Pine SCRIPT, and two
+    // different things under one name in overlapping scopes is a trap for whoever edits this next.
+    const m1Source = new ResampledM1Source({
+      db,
+      symbolId: (code) => (code === spec.symbol ? symbolRow.id : undefined),
+      onBarsRead: (n) => {
+        m1BarsRead += n;
       },
+    });
+
+    const engine = new PineTsEngine({
+      m1: m1Source,
       lookupSymbol: (code) => (code === spec.symbol ? spec : undefined),
     });
 
-    printHeader(args, spec, m1.length);
+    printHeader(args, spec, counted.bars);
 
     const names = args.fixtures.length > 0 ? args.fixtures : ['(file)'];
 
@@ -256,11 +267,12 @@ async function main(): Promise<void> {
 
       const ok = await runOne({
         probe,
+        m1BarsRead: () => m1BarsRead,
         // The EFFECTIVE range: every downstream consumer — the engine, the metrics window, the
         // stored row — sees the window that actually ran, so none of them has to correct for a
         // truncation later (A40).
         args: { ...args, toMs: effectiveToMs },
-        ...(m1Read.truncation === null ? {} : { requestedToMs: args.toMs }),
+        ...(counted.truncatedAtMs === null ? {} : { requestedToMs: args.toMs }),
         db,
         engine,
         spec,
@@ -318,6 +330,8 @@ interface RunOneParams {
   readonly label: string;
   readonly dataVersion: number;
   readonly probe?: MemoryProbe | null;
+  /** M1 rows the aggregated read consumed, for the memory table. */
+  readonly m1BarsRead?: () => number;
 }
 
 async function runOne(params: RunOneParams): Promise<boolean> {

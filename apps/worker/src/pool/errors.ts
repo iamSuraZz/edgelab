@@ -33,20 +33,51 @@ export class TaskTimeoutError extends TaskFailure {
   }
 }
 
-/** The task's thread hit its heap limit and was killed by V8. */
+/**
+ * The task's thread hit its heap limit and was killed by V8.
+ *
+ * It used to end with "This usually means an unbounded array or a var that grows on every bar" — a
+ * guess, printed on every OOM, and on the runs that prompted this work it was WRONG: the memory was
+ * the database read, 800MB of M1 rows before the engine ran a bar (A71). Blaming the script sent the
+ * reader to rewrite a strategy that was fine.
+ *
+ * So the message now reports the STAGE and bar count the task reached, taken from the last progress
+ * message it sent, and names the script only when the measurement points there — memory growing
+ * inside the engine while the data stages stayed flat.
+ */
 export class TaskOutOfMemoryError extends TaskFailure {
   readonly code = 'task-out-of-memory';
 
   constructor(
     readonly limitMb: number,
-    options?: { cause?: unknown },
+    options?: { cause?: unknown; lastStage?: string | null; chartBars?: number | null },
   ) {
-    super(
-      `Task exceeded its ${String(limitMb)} MB memory limit and was stopped. This usually means ` +
-        'an unbounded array or a var that grows on every bar.',
-      options,
-    );
+    super(describeOom(limitMb, options?.lastStage ?? null, options?.chartBars ?? null), options);
   }
+}
+
+function describeOom(limitMb: number, stage: string | null, chartBars: number | null): string {
+  const where =
+    stage === null ? 'It was stopped before reporting a stage' : `It was stopped during "${stage}"`;
+
+  const bars = chartBars === null ? '' : ` at ${chartBars.toLocaleString('en-US')} chart bars`;
+
+  /*
+   * The script is implicated ONLY from the engine stage onwards, and even then as one possibility
+   * among three. Everything before it is the platform's own reading and aggregation, where a script
+   * cannot allocate anything.
+   */
+  const blame =
+    stage !== null && /engine/i.test(stage)
+      ? 'This is inside the engine, so the script is a candidate — an unbounded array or a `var` that ' +
+        'grows on every bar — but so are the number of bars and the number of series the script plots.'
+      : 'This is in the platform, not the script: the stage above reads and aggregates data before any ' +
+        'strategy code allocates. Report it rather than rewriting the strategy.';
+
+  return (
+    `Task exceeded its ${String(limitMb)} MB memory limit and was stopped. ${where}${bars}. ` +
+    `${blame} A shorter range or a higher timeframe will reduce it.`
+  );
 }
 
 /** The thread died without a usable error — a hard crash, a process.exit, a native fault. */
@@ -90,7 +121,15 @@ export class TaskScriptError extends TaskFailure {
  */
 export function classifyTaskFailure(
   error: unknown,
-  context: { timedOut: boolean; timeoutMs: number; memoryLimitMb: number },
+  context: {
+    timedOut: boolean;
+    timeoutMs: number;
+    memoryLimitMb: number;
+    /** The last stage the task reported, so an OOM can say WHERE it died rather than guessing why. */
+    lastStage?: string | null;
+    /** Chart bars reached, when the task got far enough to report one. */
+    chartBars?: number | null;
+  },
 ): TaskFailure {
   if (error instanceof TaskFailure) return error;
 
@@ -103,7 +142,11 @@ export function classifyTaskFailure(
 
   // Node kills a thread that breaches resourceLimits with this code.
   if (code === 'ERR_WORKER_OUT_OF_MEMORY' || /out of memory/i.test(message)) {
-    return new TaskOutOfMemoryError(context.memoryLimitMb, { cause: error });
+    return new TaskOutOfMemoryError(context.memoryLimitMb, {
+      cause: error,
+      lastStage: context.lastStage ?? null,
+      chartBars: context.chartBars ?? null,
+    });
   }
 
   // piscina's own wording when it tears a worker down under a running task.

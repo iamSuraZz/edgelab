@@ -2,6 +2,7 @@ import { MessageChannel } from 'node:worker_threads';
 import path from 'node:path';
 
 import { IsolatedPool, type IsolatedPoolOptions } from './isolated-pool';
+import { DEFAULT_MEMORY_LIMIT_MB } from './memory-budget';
 import type { BacktestTaskInput, BacktestTaskOutput } from './tasks/backtest';
 import type { PingInput, PingOutput } from './tasks/ping';
 
@@ -52,7 +53,7 @@ export class TaskPool {
       filename: taskPath('backtest'),
       // A Pine run holds bars, plots and an order log; 512 MB is generous for a month of H1
       // and tight enough that a runaway `var array` is stopped rather than swapping the box.
-      memoryLimitMb: options.memoryLimitMb ?? 1_024,
+      memoryLimitMb: options.memoryLimitMb ?? DEFAULT_MEMORY_LIMIT_MB,
     });
   }
 
@@ -74,8 +75,14 @@ export class TaskPool {
   ): Promise<BacktestTaskOutput> {
     const channel = new MessageChannel();
 
+    // Remembered so an OOM can report WHERE the task died instead of guessing why (A73).
+    let lastStage: string | null = null;
+    let lastChartBars: number | null = null;
+
     channel.port2.on('message', (raw: unknown) => {
-      const event = raw as { percent?: unknown; message?: unknown };
+      const event = raw as { percent?: unknown; message?: unknown; chartBars?: unknown };
+      if (typeof event.message === 'string' && event.message !== '') lastStage = event.message;
+      if (typeof event.chartBars === 'number') lastChartBars = event.chartBars;
       if (typeof event.percent === 'number') {
         opts.onProgress?.(event.percent, typeof event.message === 'string' ? event.message : '');
       }
@@ -89,6 +96,7 @@ export class TaskPool {
         {
           ...(opts.signal === undefined ? {} : { signal: opts.signal }),
           transferList: [channel.port1],
+          lastStage: () => ({ stage: lastStage, chartBars: lastChartBars }),
         },
       );
     } finally {

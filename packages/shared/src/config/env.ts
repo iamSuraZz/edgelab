@@ -41,6 +41,25 @@ export const envSchema = z.object({
   ),
 
   /**
+   * Per-task memory limit in MB, enforced by piscina and used by the pre-flight check (A73).
+   *
+   * 1024 is the default because that is the limit the failing runs hit; raising it is a deliberate
+   * act, and the pre-flight estimate uses the SAME number so a run is never refused against one
+   * figure and killed against another.
+   */
+  TASK_MEMORY_LIMIT_MB: z.coerce.number().int().min(128).max(16_384).default(1024),
+
+  /**
+   * Per-task wall-clock limit in ms.
+   *
+   * Raised from the old hard-coded 120s to 600s, because a legitimate multi-year run now FITS in
+   * memory and was then being killed for time instead — the engine alone is ~40s on six years of
+   * XAUUSD M5 (A74). The pre-flight check estimates against this same number, so a run is refused up
+   * front rather than occupying a thread until it is cut off.
+   */
+  TASK_TIMEOUT_MS: z.coerce.number().int().min(10_000).max(3_600_000).default(600_000),
+
+  /**
    * Nightly backfill targets, `SYMBOL:provider:fromISO:toISO` separated by commas.
    *
    * Empty by default, deliberately: a server that began hitting a provider merely because it was

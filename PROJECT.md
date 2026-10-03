@@ -95,14 +95,14 @@ pnpm run import:file mt5 EURUSD <abs.csv> 120        # 120 = broker server UTC o
 
 ## Current status — NOT v1.0
 
-Green: `build` 9/9, `typecheck` 17/17, `lint` clean, **1,027 tests** (`pnpm test`).
+Green: `build` 9/9, `typecheck` 17/17, `lint` clean, **1,045 tests** (`pnpm test`).
 CI runs all five checks on every push — see `.github/workflows/ci.yml`.
 
 **Verified against the real docker stack:**
 
 | check             | result | covers                                                                                                                       |
 | ----------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------- |
-| `pnpm test:e2e`   | 41/41  | **slice B DONE WHEN**, and **all of slice D step 2**                                                                         |
+| `pnpm test:e2e`   | 51/51  | **slice B DONE WHEN**, and **all of slice D step 2**                                                                         |
 | `pnpm test:smoke` | 35/35  | **slice C DONE WHEN**, and slice F's browser work                                                                            |
 | `integrity.smoke` | 5/5    | **slice D DONE WHEN** — validate → verdict → evidence → chart, plus the clean twin. **Runs in CI** (A60)                     |
 | `journey.smoke`   | 1/1    | **spec 07 end to end**: paste → run → KPIs → validate → verdict → trade → chart (A66). Retargetable at the deployed instance |

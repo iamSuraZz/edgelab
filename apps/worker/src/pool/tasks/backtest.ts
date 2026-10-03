@@ -1,12 +1,11 @@
 import type { MessagePort } from 'node:worker_threads';
 
 import {
+  countM1InWindow,
   createDbClient,
   findSymbolByCode,
   listSymbols,
-  readM1,
   readM1Bars,
-  readM1Unsealed,
   type DbClient,
 } from '@edgelab/db';
 import {
@@ -17,6 +16,9 @@ import {
 } from '@edgelab/engine';
 import type { CostConfig, SymbolSpec, Timeframe } from '@edgelab/shared';
 import { timeframeMs, accountMoney } from '@edgelab/shared';
+
+import { ResampledM1Source } from '../../data/resampled-source';
+import { assertRunFitsMemory } from '../memory-budget';
 
 /**
  * The backtest, executed inside a piscina worker thread.
@@ -64,6 +66,10 @@ export interface BacktestTaskInput {
    * exception by recording the look before a single bar comes back.
    */
   readonly unsealed?: boolean;
+  /** Task memory limit in MB, so the pre-flight check uses the same number the pool enforces. */
+  readonly memoryLimitMb?: number;
+  /** Task wall-clock limit, for the same reason (A74). */
+  readonly taskTimeoutMs?: number;
   /** Progress sink. Transferred, so it must be listed in the run's `transferList`. */
   readonly progressPort?: MessagePort;
 }
@@ -165,8 +171,16 @@ function warmupSpanMs(timeframe: Timeframe, warmupBars: number): number {
 }
 
 export default async function backtestTask(input: BacktestTaskInput): Promise<BacktestTaskOutput> {
+  /*
+   * Progress carries the CHART BAR COUNT once it is known.
+   *
+   * Not decoration: if this task is killed for memory, the main thread's only knowledge of how far it
+   * got is the last message it received, and "stopped during X at N bars" is the difference between a
+   * report and a guess (A73).
+   */
+  let chartBars: number | null = null;
   const post = (percent: number, message: string): void => {
-    input.progressPort?.postMessage({ percent, message });
+    input.progressPort?.postMessage({ percent, message, chartBars });
   };
 
   const db = dbFor(input.databaseUrl);
@@ -182,22 +196,30 @@ export default async function backtestTask(input: BacktestTaskInput): Promise<Ba
   const barsFromMs = input.fromMs - warmupSpanMs(input.timeframe, input.warmupBars);
   // A seal cutting the range short is ANNOUNCED, never silent: a run that covers less than it
   // appears to is worse than one that refuses, because its numbers look like an answer.
-  const m1Read =
-    input.unsealed === true
-      ? // Counts the view FIRST, inside `readM1Unsealed`, so there is no path that returns sealed
-        // bars and then fails to record that it did. Nothing is truncated, so no truncation notice.
-        { bars: await readM1Unsealed(db, symbolRow.id, barsFromMs, input.toMs), truncation: null }
-      : await readM1(db, symbolRow.id, barsFromMs, input.toMs);
-  const m1 = m1Read.bars;
+  /*
+   * COUNT first, READ nothing (A72).
+   *
+   * This path is the one the Studio uses, and it is the one that died: it pulled every M1 row in the
+   * range into an array and held it for the whole run — 800MB for nine years of BTC against a 1024MB
+   * task limit. The engine only ever wants candles at the chart timeframe, so the source below
+   * aggregates while paging and the minutes are never all resident.
+   */
+  const unsealed = input.unsealed === true;
+  const counted = await countM1InWindow(db, symbolRow.id, barsFromMs, input.toMs, { unsealed });
 
   // Which instruments exist at all, for the conversion planner below. One query, so a
   // cross-currency run does not probe the registry per candidate spelling.
   const knownSymbols = new Set((await listSymbols(db)).map((r) => r.symbol.toUpperCase()));
 
-  // A window with no bars is the single most common failure, so it gets a typed detail
-  // rather than an opaque throw. The coverage probe is only run on this path.
-  const inWindow = m1.filter((b) => b.time >= input.fromMs && b.time < input.toMs);
-  if (inWindow.length === 0) {
+  /*
+   * A window with no bars is the single most common failure, so it gets a typed detail rather than an
+   * opaque throw. Counted over the REQUESTED window rather than the warmup-padded one: warmup bars
+   * sit before `fromMs` and a range covered only by them has nothing to report on.
+   */
+  const inWindowCount = (
+    await countM1InWindow(db, symbolRow.id, input.fromMs, input.toMs, { unsealed })
+  ).bars;
+  if (inWindowCount === 0) {
     const coverage = await readCoverage(db, symbolRow.id);
     throw taskError(
       describeNoData({
@@ -211,11 +233,30 @@ export default async function backtestTask(input: BacktestTaskInput): Promise<Ba
     );
   }
 
+  /*
+   * PRE-FLIGHT: refuse a run that cannot fit, rather than letting the task be killed mid-way (A73).
+   *
+   * Checked here, inside the task, because this is where the bar count is known and where the limit
+   * applies. A refusal names the figures; the previous behaviour was a killed worker and a message
+   * blaming the script.
+   */
+  // The estimate's own figure, so the OOM message and the pre-flight refusal describe the same thing.
+  chartBars = assertRunFitsMemory({
+    m1Bars: counted.bars,
+    timeframe: input.timeframe,
+    symbol: spec.symbol,
+    limitMb: input.memoryLimitMb,
+    timeoutMs: input.taskTimeoutMs,
+  }).chartBars;
+
+  const m1Source = new ResampledM1Source({
+    db,
+    symbolId: (code) => (code === spec.symbol ? symbolRow.id : undefined),
+    unsealed,
+  });
+
   const engine = new PineTsEngine({
-    m1: {
-      readM1: (_symbol, fromMs, toMs) =>
-        Promise.resolve(m1.filter((b) => b.time >= fromMs && b.time < toMs)),
-    },
+    m1: m1Source,
     lookupSymbol: (code) => (code === spec.symbol ? spec : undefined),
   });
 

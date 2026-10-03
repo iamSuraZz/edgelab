@@ -155,23 +155,60 @@ interface Accumulator {
  * Input must be sorted strictly ascending by time; duplicate timestamps indicate a data
  * integrity problem and throw rather than being silently merged.
  */
-export function resample(
-  m1Bars: readonly ResampleInput[],
-  tf: Timeframe,
-  opts?: ResampleOptions,
-): Candle[] {
-  const o = resolveOptions(opts);
-  assertStrictlyAscending(m1Bars);
+/**
+ * Incremental resampling: push M1 bars, collect finished candles.
+ *
+ * Exists so a multi-year M1 series never has to be resident. The whole series as JS objects is what
+ * made a BTC backtest die — 4.77M rows at ~176 bytes each is 800MB before the engine has run a single
+ * bar (A71). Fed from a chunked read, peak memory becomes one chunk plus the resampled output.
+ *
+ * `resample()` is implemented IN TERMS OF this, so there is exactly one bucketing implementation. Two
+ * would drift, and the one that drifted would be the streaming one nobody reads.
+ */
+export class ResampleStream {
+  private acc: Accumulator | null = null;
+  private lastTime = -Infinity;
+  /** Position in the stream, so an error names the same index the array form would. */
+  private index = 0;
+  private readonly o: ResolvedOptions;
 
-  const out: Candle[] = [];
-  let acc: Accumulator | null = null;
+  constructor(
+    private readonly tf: Timeframe,
+    opts?: ResampleOptions,
+  ) {
+    this.o = resolveOptions(opts);
+  }
 
-  for (const bar of m1Bars) {
-    const start = bucketStartResolved(bar.time, tf, o);
+  /**
+   * Add one M1 bar. Returns the candle that just COMPLETED, if this bar opened a new bucket.
+   *
+   * Monotonicity is checked across the whole stream, not per chunk: a chunked reader that returned
+   * overlapping or out-of-order pages would otherwise produce silently wrong buckets, and the array
+   * version's `assertStrictlyAscending` cannot see across calls.
+   */
+  push(bar: ResampleInput): Candle | null {
+    // The two cases stay DISTINCT. A duplicate timestamp means the read overlapped a page boundary;
+    // a backwards one means it was ordered wrongly. Those have different fixes, so they keep
+    // different messages — the same two the array form has always produced.
+    if (bar.time === this.lastTime) {
+      throw new Error(
+        `Duplicate bar timestamp at index ${String(this.index)}: ${String(bar.time)}`,
+      );
+    }
+    if (bar.time < this.lastTime) {
+      throw new Error(
+        `Bars must be sorted ascending by time; index ${String(this.index)} goes backwards`,
+      );
+    }
+    this.lastTime = bar.time;
+    this.index += 1;
 
-    if (acc === null || acc.time !== start) {
-      if (acc !== null) out.push(finalise(acc, tf, o));
-      acc = {
+    const start = bucketStartResolved(bar.time, this.tf, this.o);
+    let completed: Candle | null = null;
+
+    if (this.acc === null || this.acc.time !== start) {
+      if (this.acc !== null) completed = finalise(this.acc, this.tf, this.o);
+      this.acc = {
         time: start,
         open: bar.open,
         high: bar.high,
@@ -182,18 +219,50 @@ export function resample(
         spreadCount: 0,
       };
     } else {
-      if (bar.high > acc.high) acc.high = bar.high;
-      if (bar.low < acc.low) acc.low = bar.low;
-      acc.close = bar.close;
-      acc.volume += bar.volume;
+      if (bar.high > this.acc.high) this.acc.high = bar.high;
+      if (bar.low < this.acc.low) this.acc.low = bar.low;
+      this.acc.close = bar.close;
+      this.acc.volume += bar.volume;
     }
 
     const { sum, count } = spreadContribution(bar);
-    acc.spreadSum += sum;
-    acc.spreadCount += count;
+    this.acc.spreadSum += sum;
+    this.acc.spreadCount += count;
+
+    return completed;
   }
 
-  if (acc !== null) out.push(finalise(acc, tf, o));
+  /** The final, partially filled bucket. Call once, after the last `push`. */
+  flush(): Candle | null {
+    if (this.acc === null) return null;
+    const last = finalise(this.acc, this.tf, this.o);
+    this.acc = null;
+    return last;
+  }
+}
+
+/**
+ * Aggregate M1 bars up to `tf`.
+ *
+ * The array form, for callers that already hold the series. Delegates to `ResampleStream` so the
+ * bucketing rules live in exactly one place.
+ */
+export function resample(
+  m1Bars: readonly ResampleInput[],
+  tf: Timeframe,
+  opts?: ResampleOptions,
+): Candle[] {
+  const stream = new ResampleStream(tf, opts);
+  const out: Candle[] = [];
+
+  for (const bar of m1Bars) {
+    const completed = stream.push(bar);
+    if (completed !== null) out.push(completed);
+  }
+
+  const last = stream.flush();
+  if (last !== null) out.push(last);
+
   return out;
 }
 
@@ -223,18 +292,4 @@ export function resampleCandles(
 ): Candle[] {
   // Candles carry spreadSamples, so this recombines spread means exactly by weight.
   return resample(candles, tf, opts);
-}
-
-function assertStrictlyAscending(bars: readonly ResampleInput[]): void {
-  for (let i = 1; i < bars.length; i += 1) {
-    const prev = bars[i - 1];
-    const cur = bars[i];
-    if (prev === undefined || cur === undefined) continue;
-    if (cur.time === prev.time) {
-      throw new Error(`Duplicate bar timestamp at index ${i}: ${cur.time}`);
-    }
-    if (cur.time < prev.time) {
-      throw new Error(`Bars must be sorted ascending by time; index ${i} goes backwards`);
-    }
-  }
 }

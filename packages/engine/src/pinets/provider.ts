@@ -1,6 +1,7 @@
 import {
   type Bar,
   type SymbolSpec,
+  type Candle,
   type Timeframe,
   MS_PER_MINUTE,
   timeframeMs,
@@ -28,6 +29,19 @@ import { parsePineTimeframe, splitTicker } from './timeframe';
 export interface M1Source {
   /** M1 bars for [fromMs, toMs), ascending, no duplicates. */
   readM1(symbol: string, fromMs: number, toMs: number): Promise<Bar[]>;
+  /**
+   * Candles already aggregated to `tf`, when the source can produce them without materialising M1.
+   *
+   * OPTIONAL, and the reason it exists is memory rather than speed (A72). `readM1` hands over the
+   * whole range as JS objects — ~170 bytes a bar, so 800MB for nine years of BTC — and the array is
+   * then pinned for the run's lifetime by whoever supplied it. A source that can page M1 through a
+   * `ResampleStream` returns only the aggregate, and the M1 never exists all at once.
+   *
+   * It must produce EXACTLY what `resample(await readM1(...), tf)` produces, including each bucket's
+   * mean spread: the cost overlay reads that spread, and a source that dropped it would silently fall
+   * back to `defaultSpreadPoints` and overstate costs — the A20 bug, reintroduced from a new angle.
+   */
+  readResampled?(symbol: string, tf: Timeframe, fromMs: number, toMs: number): Promise<Candle[]>;
 }
 
 /** PineTS Kline. All 12 fields are required; unused ones must be 0, not undefined. */
@@ -183,9 +197,20 @@ export class ResamplingPineProvider {
     if (cached !== undefined) return cached;
 
     const window = this.resolveWindow(tf, limit, sDate, eDate);
-    const m1 = await this.options.m1.readM1(symbol, window.fromMs, window.toMs);
 
-    let candles = resample(m1, tf, this.options.resampleOptions);
+    /*
+     * Prefer the aggregated read when the source offers one: it never materialises the M1 series,
+     * which is the single largest term in a long-range run's memory (A71/A72). The fallback is the
+     * original path, so every existing source and every test keeps working unchanged.
+     */
+    let candles =
+      this.options.m1.readResampled !== undefined
+        ? await this.options.m1.readResampled(symbol, tf, window.fromMs, window.toMs)
+        : resample(
+            await this.options.m1.readM1(symbol, window.fromMs, window.toMs),
+            tf,
+            this.options.resampleOptions,
+          );
 
     // Cutoff: drop any bucket that would contain M1 at or after the cutoff. Checking
     // closeTime (the exclusive bucket end) is what makes this airtight — a bucket whose

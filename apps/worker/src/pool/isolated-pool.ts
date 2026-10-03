@@ -80,6 +80,14 @@ export class IsolatedPool<TInput, TOutput> {
        * every message, so anything port-shaped in the input must be listed here.
        */
       transferList?: readonly MessagePort[];
+      /**
+       * The last stage the task reported, read AT FAILURE TIME.
+       *
+       * A getter rather than a value, because the point is to know where the task had got to when it
+       * died — which is only knowable after the fact (A73). The caller owns the progress channel, so
+       * it owns the answer.
+       */
+      lastStage?: () => { stage: string | null; chartBars: number | null };
     } = {},
   ): Promise<TOutput> {
     const timeout = new AbortController();
@@ -112,6 +120,9 @@ export class IsolatedPool<TInput, TOutput> {
         timedOut: timeout.signal.aborted && opts.signal?.aborted !== true,
         timeoutMs: this.timeoutMs,
         memoryLimitMb: this.memoryLimitMb,
+        ...(opts.lastStage === undefined
+          ? {}
+          : { lastStage: opts.lastStage().stage, chartBars: opts.lastStage().chartBars }),
       });
     } finally {
       clearTimeout(timer);

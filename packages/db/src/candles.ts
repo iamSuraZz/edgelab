@@ -97,6 +97,129 @@ export async function readM1(
   };
 }
 
+/**
+ * Page through a window's M1 bars, handing each to a callback, holding only one page.
+ *
+ * The reason this exists: reading a multi-year M1 range into an array costs ~170 bytes a bar, so BTC
+ * over nine years is 800MB on the heap before the engine runs one bar, and the worker's 1024MB task
+ * limit killed the run (A71). A caller that only needs an AGGREGATE — resampled candles, a count, a
+ * scan — can fold the stream instead of materialising it.
+ *
+ * It deliberately knows nothing about resampling. `packages/data` owns the resampler and does not
+ * depend on this package; importing it here to return candles would add a storage-to-aggregation edge
+ * that nothing else needs. The consumer composes the two.
+ *
+ * The SEAL is applied through the same `effectiveWindow` as `readM1`, because this is a second way
+ * into the bars and a reader that forgot the holdout would be a worse bug than the one it fixes. The
+ * truncation comes back in the return value for the same reason it does there.
+ *
+ * Keyed paging on `ts`, not `LIMIT`/`OFFSET`: offset paging re-scans from the start of the range on
+ * every page, turning a linear read into a quadratic one over millions of rows. Keyed paging is a
+ * range scan per page and can neither skip nor repeat a row, since `(symbol_id, ts)` is the key.
+ */
+export interface M1Stream {
+  readonly truncation: SealTruncation | null;
+  /** M1 rows actually handed to the callback. */
+  readonly barsRead: number;
+}
+
+/** Rows per page. 100k M1 objects is ~17MB resident — a tolerable floor for peak memory. */
+export const M1_PAGE_ROWS = 100_000;
+
+export async function streamM1(
+  client: DbClient,
+  symbolId: string,
+  fromMs: number,
+  toMs: number,
+  onBar: (bar: Bar) => void,
+  opts: { readonly unsealed?: boolean } = {},
+): Promise<M1Stream> {
+  /*
+   * `unsealed` counts the view BEFORE a single page is read, exactly as `readM1Unsealed` does.
+   *
+   * The counting lives here rather than in the caller for the reason A59 recorded: there must be no
+   * path that returns sealed bars and then fails to record that it did, and a flag the caller passes
+   * is only safe if the recording is on this side of it.
+   */
+  if (opts.unsealed === true) {
+    await recordHoldoutView(client, symbolId);
+  }
+
+  const holdout = opts.unsealed === true ? null : await getHoldout(client, symbolId);
+  const window = effectiveWindow(fromMs, toMs, holdout);
+
+  let barsRead = 0;
+
+  if (!window.empty) {
+    let cursorMs = window.fromMs;
+    let inclusive = true;
+
+    for (;;) {
+      const page = await client.pool.query<CandleRow>(
+        `SELECT ts, open, high, low, close, volume, spread
+           FROM candles_m1
+          WHERE symbol_id = $1 AND ts ${inclusive ? '>=' : '>'} $2 AND ts < $3
+          ORDER BY ts
+          LIMIT ${String(M1_PAGE_ROWS)}`,
+        [symbolId, toDbTime(cursorMs), toDbTime(window.toMs)],
+      );
+
+      if (page.rows.length === 0) break;
+
+      for (const row of page.rows) onBar(rowToBar(row));
+
+      barsRead += page.rows.length;
+      cursorMs = fromDbTime(page.rows[page.rows.length - 1]!.ts);
+      inclusive = false;
+
+      // A short page is the last page; checking saves a round trip per read.
+      if (page.rows.length < M1_PAGE_ROWS) break;
+    }
+  }
+
+  if (!window.truncated || holdout === null) return { truncation: null, barsRead };
+
+  const withheld = await countM1(client, symbolId, window.toMs, toMs);
+
+  return {
+    truncation: {
+      sealId: holdout.id,
+      cutAtMs: holdout.sealedFromMs,
+      requestedToMs: toMs,
+      barsWithheld: withheld,
+    },
+    barsRead,
+  };
+}
+
+/**
+ * How many M1 rows a window holds, without reading them. Used by the pre-flight estimate.
+ *
+ * `unsealed` counts THROUGH a seal without recording a view, and the asymmetry with `streamM1` is
+ * deliberate. A59's rule is about returning sealed BARS; a count reveals how many minutes exist, not
+ * what they contain, and the read that follows records the view before a single one comes back.
+ * Charging a view for the count would mean the holdout test spent two looks per run.
+ *
+ * Without this option the holdout test counts zero — its range IS the sealed range — and the caller
+ * reports "no data" for a window full of it. That was a real regression, caught by the e2e that
+ * asserts the view count rises by exactly one.
+ */
+export async function countM1InWindow(
+  client: DbClient,
+  symbolId: string,
+  fromMs: number,
+  toMs: number,
+  opts: { readonly unsealed?: boolean } = {},
+): Promise<{ bars: number; truncatedAtMs: number | null }> {
+  const holdout = opts.unsealed === true ? null : await getHoldout(client, symbolId);
+  const window = effectiveWindow(fromMs, toMs, holdout);
+
+  if (window.empty) return { bars: 0, truncatedAtMs: window.truncated ? window.toMs : null };
+
+  const bars = await countM1(client, symbolId, window.fromMs, window.toMs);
+  return { bars, truncatedAtMs: window.truncated ? window.toMs : null };
+}
+
 export interface M1Read {
   readonly bars: Bar[];
   /** Present when a seal cut the request short. Null when the full range was returned. */
@@ -157,7 +280,12 @@ async function queryM1(
     [symbolId, toDbTime(fromMs), toDbTime(toMs)],
   );
 
-  return result.rows.map((r) => ({
+  return result.rows.map(rowToBar);
+}
+
+/** One row -> one `Bar`, shared by the array reader and the streaming one so they cannot diverge. */
+function rowToBar(r: CandleRow): Bar {
+  return {
     time: fromDbTime(r.ts),
     open: r.open,
     high: r.high,
@@ -165,7 +293,7 @@ async function queryM1(
     close: r.close,
     volume: r.volume,
     spread: r.spread,
-  }));
+  };
 }
 
 /** Newest stored bar, which is where a resumable ingest picks up. */

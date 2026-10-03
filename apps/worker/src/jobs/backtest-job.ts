@@ -100,6 +100,9 @@ export async function processBacktestJob(
 
     const output = await deps.pool.backtest(
       {
+        // So the task refuses against the limit the pool actually enforces.
+        memoryLimitMb: deps.pool.stats.memoryLimitMb,
+        taskTimeoutMs: deps.pool.stats.timeoutMs,
         runId,
         databaseUrl: deps.databaseUrl,
         source: job.data.source,

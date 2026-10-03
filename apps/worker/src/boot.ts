@@ -55,7 +55,10 @@ export function startWorkers(env: Env, options: StartWorkersOptions = {}): Worke
   const pool = new TaskPool({
     // The pool size comes from validated config, falling back to the container's CPU quota (A67).
     maxThreads: options.maxThreads ?? resolvePoolSize(env.WORKER_POOL_SIZE).threads,
-    ...(options.taskTimeoutMs === undefined ? {} : { taskTimeoutMs: options.taskTimeoutMs }),
+    taskTimeoutMs: options.taskTimeoutMs ?? env.TASK_TIMEOUT_MS,
+    // The SAME limit the pre-flight check estimates against (A73): refusing against one figure and
+    // dying against another would be worse than not checking.
+    memoryLimitMb: env.TASK_MEMORY_LIMIT_MB,
   });
   const events = new JobEventPublisher(redis);
   const cancellation = new CancellationWatcher(env.REDIS_URL);
