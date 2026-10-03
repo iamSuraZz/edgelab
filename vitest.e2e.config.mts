@@ -35,7 +35,12 @@ export default defineConfig({
     testTimeout: 240_000,
     hookTimeout: 120_000,
     pool: 'forks',
-    poolOptions: { forks: { singleFork: true } },
+    /*
+     * `poolOptions` was REMOVED in Vitest 4 — the runner printed a deprecation notice for it on every
+     * run and ignored it, so `singleFork: true` had not applied for some time. `fileParallelism: false`
+     * below is what actually serialises the files, which is all this suite needed: one API, one queue,
+     * one database.
+     */
     fileParallelism: false,
     // Decorator metadata for Nest's DI. The apps are CommonJS, so esbuild needs telling.
     esbuild: { target: 'node22' },

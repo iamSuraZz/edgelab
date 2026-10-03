@@ -2942,3 +2942,35 @@ storage-reads-aggregation rather than the reverse.
 > including the two that proved the memory fix. Only the e2e, which runs the real pool, caught it. The
 > CLI being a main-thread path is exactly why it could not: the measurement it produced was correct and
 > the code it measured was unreachable from the thread that matters.
+
+## A76 — The regression test was costing eight minutes of setup, and measuring the wrong thing
+
+Two corrections to the long-range test, both found by running it rather than by reading it.
+
+**It seeded its own data, and that was unaffordable.** Three years of synthetic 24/7 minutes in
+`beforeAll` measured **160s per year** on this machine — about eight minutes before the first
+assertion — and CI failed on it. It now uses the EURUSD range the suite already seeds, which spans two
+years on a developer database and on CI's synthetic seed alike. The property under test never needed
+novel data, only a multi-year span and both read paths to compare.
+
+**Its memory assertion could invert.** Comparing `heapUsed` deltas without forcing a GC measures
+ALLOCATION RATE, not retention — and the streaming read allocates one short-lived object per row, so it
+measured **82.9MB against the materialising read's 78.2MB**: the opposite of the truth, on a fix that
+is a 4x improvement. A comparison that can come out backwards is worse than no comparison.
+
+Forcing a GC turned out not to be arrangeable in the e2e runner, which is how the next thing surfaced:
+
+> **`poolOptions` was removed in Vitest 4.** The e2e config still carried
+> `poolOptions: { forks: { singleFork: true } }`, the runner printed a deprecation notice for it on
+> every single run, and the setting had not applied for some time. `fileParallelism: false` is what
+> actually serialises these files, and it was already there — so the dead block is gone rather than
+> ported.
+
+So the A/B comparison runs only when a GC is available, and says so when it is not:
+
+    NODE_OPTIONS=--expose-gc pnpm test:e2e
+
+What the test asserts unconditionally is what it can prove on its own: the candle count sits far below
+the minute count, the pre-flight accepts the range at H1, and it refuses nine years of BTC minutes with
+an actionable message. The authoritative memory numbers are A72's, measured with
+`pnpm backtest --mem` under `--expose-gc` on the runs that actually failed.
