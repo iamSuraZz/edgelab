@@ -102,7 +102,7 @@ CI runs all five checks on every push — see `.github/workflows/ci.yml`.
 
 | check             | result | covers                                                                                                                       |
 | ----------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------- |
-| `pnpm test:e2e`   | 51/51  | **slice B DONE WHEN**, and **all of slice D step 2**                                                                         |
+| `pnpm test:e2e`   | 46/46  | **slice B DONE WHEN**, and **all of slice D step 2**                                                                         |
 | `pnpm test:smoke` | 35/35  | **slice C DONE WHEN**, and slice F's browser work                                                                            |
 | `integrity.smoke` | 5/5    | **slice D DONE WHEN** — validate → verdict → evidence → chart, plus the clean twin. **Runs in CI** (A60)                     |
 | `journey.smoke`   | 1/1    | **spec 07 end to end**: paste → run → KPIs → validate → verdict → trade → chart (A66). Retargetable at the deployed instance |
@@ -116,6 +116,13 @@ Overfitting" tab — are all built, and its DONE WHEN has been met **in a real b
 deployment. See `docs/spec/08-roadmap.md` for the slices and `docs/decisions.md` for D1–D8, A1–A5
 and the verification-sprint findings, which override the specs.
 
+> **A Studio backtest on years of BTC and XAU data died at the 1024MB task limit, and the pool blamed
+> the script.** It was the DB read: 4.77M M1 rows as JS objects is 800MB before the engine runs a bar
+> (A71). M1 is now paged and aggregated as it is read, so BTC M15 over nine years went from **1034MB to
+> 232MB** and XAU M5 over six from **866MB to 472MB**, with identical results. A run that still cannot
+> fit is refused up front with its bar count, its estimate and the timeframe that would work (A73), and
+> the OOM message no longer blames the script unless the measurement points there.
+>
 > **The verification sprint found eight real defects in code that compiled, linted and passed 616
 > unit tests.** Worth remembering before trusting any future "code complete" claim here: the API
 > had never successfully booted (Nest could not resolve a single class-typed dependency under
